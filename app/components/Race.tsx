@@ -6,16 +6,13 @@ import { COUNTRIES, type Country } from "../data/countries";
 import { FINISH, TRACK_LEN, stepRacer } from "@/lib/race";
 
 const SPRITE = 96; // baked marble sprite resolution (px)
-const MAX_ACTIVE = 20; // most marbles allowed on the road at once
-const NEED = 3; // finishers needed to end the race (gold/silver/bronze)
-const FIRES = 2; // just two small fires on the track
-const POP_CHANCE = 0.4; // chance to pop only when a marble rolls right over a fire
-
-type Fire = { u: number; laneN: number };
+const RACERS = 10; // fixed field - ten marbles, no more
+const NEED = 3; // finishers needed to end the race
+const OBSTACLES = 10; // obstacles scattered on the track
 const FONT = "system-ui, -apple-system, 'Segoe UI', sans-serif";
 
 type Racer = {
-  i: number; // wobble seed (= country index)
+  i: number;
   ci: number; // country index
   dist: number;
   speed: number;
@@ -23,12 +20,26 @@ type Racer = {
   place: number;
   laneN: number;
   startU: number;
-  uAdj: number; // visual along-track nudge from anti-overlap (not race distance)
-  dead: boolean;
-  pop: number;
-  spawn: number; // drop-in animation 1 -> 0
+  uAdj: number; // visual anti-overlap nudge (not race distance)
+  scale: number; // 1 = normal; <1 small+fast, >1 big+slow
+  effMul: number; // active speed multiplier from an obstacle
+  effTime: number; // seconds remaining on that multiplier
+  obCool: number; // debounce so one obstacle fires once per pass
 };
 type Winner = { country: Country; place: number };
+
+// Obstacle types + their effect. Fires are gone - nothing removes a marble.
+type ObType = "boost" | "mud" | "tar" | "banana" | "shrink" | "grow";
+type Obstacle = { u: number; laneN: number; type: ObType };
+const OB: Record<ObType, { color: string; icon: string; mul?: number; time?: number; scale?: number }> = {
+  boost: { color: "#2fbf4f", icon: "⚡", mul: 1.8, time: 1.2 }, // green mud - speed up
+  mud: { color: "#8a5a2b", icon: "🟤", mul: 0.55, time: 1.3 }, // brown mud - slow
+  tar: { color: "#20232a", icon: "🖤", mul: 0.4, time: 1.6 }, // black mud - slower
+  banana: { color: "#f4d03f", icon: "🍌", mul: 0.45, time: 1.1 }, // banana - slip
+  shrink: { color: "#37b6ff", icon: "🔽", scale: 0.78 }, // small -> faster
+  grow: { color: "#c061ff", icon: "🔼", scale: 1.28 }, // big -> slower
+};
+const OB_TYPES: ObType[] = ["boost", "mud", "tar", "banana", "shrink", "grow"];
 
 type Theme = {
   name: string;
@@ -40,7 +51,6 @@ type Theme = {
   decor: "stars" | "trees" | "dots" | "none";
   decorColor: string;
 };
-
 const THEMES: Theme[] = [
   { name: "Night", bg: "#04050a", track: "#191c26", line: "rgba(255,255,255,0.5)", dashed: true, edge: "rgba(255,255,255,0.18)", decor: "stars", decorColor: "rgba(255,255,255,0.8)" },
   { name: "Grass", bg: "#08160d", track: "#2b2f38", line: "rgba(255,255,255,0.5)", dashed: true, edge: "rgba(255,255,255,0.16)", decor: "trees", decorColor: "#2e8b45" },
@@ -61,9 +71,6 @@ function bakeMarble(img: HTMLImageElement): HTMLCanvasElement {
   const w = img.width * s;
   const h = img.height * s;
   g.drawImage(img, (SPRITE - w) / 2, (SPRITE - h) / 2, w, h);
-  // radial rim shading only (symmetric, so it can rotate). The directional
-  // gloss highlight is drawn per-frame and stays put, so the flag reads as a
-  // rolling 3D marble under a fixed light.
   const rim = g.createRadialGradient(r, r, r * 0.35, r, r, r);
   rim.addColorStop(0, "rgba(0,0,0,0)");
   rim.addColorStop(0.72, "rgba(0,0,0,0.06)");
@@ -74,8 +81,6 @@ function bakeMarble(img: HTMLImageElement): HTMLCanvasElement {
   return c;
 }
 
-// Draw one rolling glossy marble: the flag sprite spins by `roll`, then a fixed
-// top-left highlight is laid over it so it looks like a 3D ball under light.
 function drawBall(ctx: Ctx, sp: HTMLCanvasElement, x: number, y: number, ms: number, roll: number) {
   if (sp && sp.width) {
     ctx.save();
@@ -99,7 +104,7 @@ function drawBall(ctx: Ctx, sp: HTMLCanvasElement, x: number, y: number, ms: num
   ctx.restore();
 }
 
-// --- Track geometry: a rounded-rect loop hugging the screen edges -----------
+// --- Track geometry ---------------------------------------------------------
 
 type Seg = { len: number; at: (t: number) => { x: number; y: number; nx: number; ny: number } };
 type Geo = {
@@ -117,10 +122,10 @@ type Geo = {
 
 function buildGeo(W: number, H: number, dpr: number, theme: Theme): Geo {
   const m = Math.min(W, H);
-  const inset = m * 0.016; // hug the screen edge
-  const band = m * 0.33; // big road - most of the screen is racing surface
+  const inset = m * 0.016;
+  const band = m * 0.33;
   const bandHalf = band / 2;
-  const size = band * 0.204; // small marbles so the field never overlaps
+  const size = band * 0.24; // ten marbles -> a bit bigger and clear
   const L = inset + bandHalf;
   const T = inset + bandHalf;
   const R = W - inset - bandHalf;
@@ -173,19 +178,15 @@ function crossed(u0: number, u1: number, uF: number): boolean {
   return u1 >= u0 ? uF > u0 && uF <= u1 : uF > u0 || uF <= u1;
 }
 
-// Full 2D anti-overlap: push overlapping marbles apart both sideways (laneN)
-// and along the track (uAdj, a visual-only nudge that never touches race
-// distance), so with small marbles on a wide road nothing ever overlaps.
+// Full 2D anti-overlap using each marble's actual (scaled) radius.
 function separate(active: Racer[], g: Geo) {
   const spread = g.bandHalf - g.size * 0.5;
   if (spread <= 0) return;
-  const minD = g.size * 1.04;
-  for (const r of active) if (!r.dead) r.uAdj *= 0.9; // relax back toward true position
+  for (const r of active) r.uAdj *= 0.9;
   for (let iter = 0; iter < 6; iter++) {
     for (let i = 0; i < active.length; i++) {
-      if (active[i].dead) continue;
       for (let j = i + 1; j < active.length; j++) {
-        if (active[j].dead) continue;
+        const minD = (g.size * active[i].scale * 0.5 + g.size * active[j].scale * 0.5) * 1.04;
         let da = (uOf(active[i]) - uOf(active[j])) * g.perim;
         if (da > g.perim / 2) da -= g.perim;
         else if (da < -g.perim / 2) da += g.perim;
@@ -279,32 +280,25 @@ function drawTrack(ctx: Ctx, g: Geo) {
   ctx.restore();
 }
 
-// Two small marble-sized fires, each sitting in one lane. Roll right over one
-// and you might pop - most marbles pass safely beside it.
-function drawFires(ctx: Ctx, g: Geo, fires: Fire[], t: number) {
+function drawObstacles(ctx: Ctx, g: Geo, obstacles: Obstacle[]) {
   const spread = g.bandHalf - g.size * 0.5;
-  const rad = g.size * 0.5;
-  for (const fire of fires) {
-    const p = pathPoint(g, fire.u);
-    const x = p.x + p.nx * fire.laneN * spread;
-    const y = p.y + p.ny * fire.laneN * spread;
-    const flick = 0.9 + 0.1 * Math.sin(t * 10 + fire.u * 40);
-    const gl = ctx.createRadialGradient(x, y, rad * 0.1, x, y, rad * 1.7 * flick);
-    gl.addColorStop(0, "rgba(255,200,80,0.85)");
-    gl.addColorStop(0.5, "rgba(255,100,20,0.5)");
-    gl.addColorStop(1, "rgba(255,60,0,0)");
-    ctx.fillStyle = gl;
+  const rad = g.size * 0.62;
+  for (const ob of obstacles) {
+    const def = OB[ob.type];
+    const p = pathPoint(g, ob.u);
+    const x = p.x + p.nx * ob.laneN * spread;
+    const y = p.y + p.ny * ob.laneN * spread;
     ctx.beginPath();
-    ctx.arc(x, y, rad * 1.7 * flick, 0, Math.PI * 2);
+    ctx.arc(x, y, rad, 0, Math.PI * 2);
+    ctx.fillStyle = def.color;
+    ctx.globalAlpha = 0.85;
     ctx.fill();
-    ctx.beginPath();
-    ctx.arc(x, y, rad * flick, 0, Math.PI * 2);
-    ctx.fillStyle = "#ff7a1a";
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(x, y, rad * 0.55 * flick, 0, Math.PI * 2);
-    ctx.fillStyle = "#ffe066";
-    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.font = `${Math.round(rad * 1.1)}px ${FONT}`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(def.icon, x, y + rad * 0.06);
+    ctx.textBaseline = "alphabetic";
   }
 }
 
@@ -327,53 +321,27 @@ function drawMarbles(ctx: Ctx, g: Geo, active: Racer[], sprites: Sprites) {
     const p = pathPoint(g, uOf(r));
     const off = r.laneN * spread;
     const x = p.x + p.nx * off;
-    let y = p.y + p.ny * off;
-    const sp = sprites[r.ci];
-
-    if (r.dead) {
-      if (r.pop <= 0) continue;
-      const t = 1 - r.pop;
-      const ms = g.size * (1 + t * 0.9);
-      ctx.globalAlpha = r.pop;
-      if (sp && sp.width) ctx.drawImage(sp, x - ms / 2, y - ms / 2, ms, ms);
-      ctx.beginPath();
-      ctx.arc(x, y, ms * 0.62, 0, Math.PI * 2);
-      ctx.lineWidth = 2.5 * g.dpr;
-      ctx.strokeStyle = `rgba(255,220,150,${r.pop})`;
-      ctx.stroke();
-      ctx.globalAlpha = 1;
-      continue;
-    }
-
-    let ms = g.size;
-    if (r.spawn > 0) {
-      // drop-in: fall from above + fade
-      y -= r.spawn * g.size * 1.4;
-      ctx.globalAlpha = 1 - r.spawn;
-      ms = g.size * (1.2 - r.spawn * 0.2);
-    }
-    drawBall(ctx, sp, x, y, ms, r.dist * 0.13); // spin ∝ distance = rolling
-    ctx.globalAlpha = 1;
+    const y = p.y + p.ny * off;
+    drawBall(ctx, sprites[r.ci], x, y, g.size * r.scale, r.dist * 0.13);
   }
 }
 
-// Live top-3 in the middle: rank (gold/silver/bronze) + flag, plus a tiny
-// "X left" line so you can see the field thin out.
-function drawTop3(ctx: Ctx, g: Geo, top: number[], sprites: Sprites, remaining: number) {
+// Live top-3 in the middle: rank (gold/silver/bronze) + flag. Nothing else.
+function drawTop3(ctx: Ctx, g: Geo, top: number[], sprites: Sprites) {
   const cx = g.hole.x + g.hole.w / 2;
   const cy = g.hole.y + g.hole.h / 2;
-  const rowH = Math.min(g.hole.h * 0.08, g.size * 1.4);
+  const rowH = Math.min(g.hole.h * 0.09, g.size * 1.5);
   const flag = rowH * 0.92;
   const numW = rowH * 0.7;
   const gap = rowH * 0.24;
   const rowW = numW + gap + flag;
-  const startY = cy - rowH * 1.6;
+  const startY = cy - rowH * 1.3;
   const medals = ["#ffd24a", "#cfd6e0", "#e0a06a"];
 
   ctx.textAlign = "center";
   ctx.fillStyle = "rgba(255,255,255,0.8)";
-  ctx.font = `700 ${Math.round(rowH * 0.52)}px ${FONT}`;
-  ctx.fillText("TOP 3", cx, startY - rowH * 0.5);
+  ctx.font = `700 ${Math.round(rowH * 0.5)}px ${FONT}`;
+  ctx.fillText("TOP 3", cx, startY - rowH * 0.55);
 
   for (let k = 0; k < top.length && k < 3; k++) {
     const y = startY + k * rowH;
@@ -382,14 +350,8 @@ function drawTop3(ctx: Ctx, g: Geo, top: number[], sprites: Sprites, remaining: 
     ctx.fillStyle = medals[k];
     ctx.font = `800 ${Math.round(rowH * 0.62)}px ${FONT}`;
     ctx.fillText(`${k + 1}`, x + numW * 0.85, y + flag * 0.72);
-    const sp = sprites[top[k]];
-    drawBall(ctx, sp, x + numW + gap + flag / 2, y + flag / 2, flag, 0);
+    drawBall(ctx, sprites[top[k]], x + numW + gap + flag / 2, y + flag / 2, flag, 0);
   }
-
-  ctx.textAlign = "center";
-  ctx.fillStyle = "rgba(255,255,255,0.4)";
-  ctx.font = `600 ${Math.round(rowH * 0.42)}px ${FONT}`;
-  ctx.fillText(`${remaining} left`, cx, startY + 3 * rowH + rowH * 0.4);
 }
 
 function drawCountdown(ctx: Ctx, g: Geo, countdown: number, goFlash: number) {
@@ -399,8 +361,7 @@ function drawCountdown(ctx: Ctx, g: Geo, countdown: number, goFlash: number) {
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   if (countdown > 0) {
-    const frac = countdown - Math.floor(countdown);
-    ctx.globalAlpha = 0.5 + 0.5 * frac;
+    ctx.globalAlpha = 0.5 + 0.5 * (countdown - Math.floor(countdown));
     ctx.fillStyle = "#ffffff";
     ctx.font = `800 ${Math.round(big)}px ${FONT}`;
     ctx.fillText(`${Math.ceil(countdown)}`, cx, cy);
@@ -423,17 +384,16 @@ export default function Race() {
   const state = useRef<{
     sprites: HTMLCanvasElement[];
     theme: Theme;
-    queue: number[];
     active: Racer[];
     finishers: number[];
-    fires: Fire[];
+    obstacles: Obstacle[];
     countdown: number;
     goFlash: number;
     elapsed: number;
     raf: number;
     last: number;
     ended: boolean;
-  }>({ sprites: [], theme: THEMES[0], queue: [], active: [], finishers: [], fires: [], countdown: 3, goFlash: 0, elapsed: 0, raf: 0, last: 0, ended: false });
+  }>({ sprites: [], theme: THEMES[0], active: [], finishers: [], obstacles: [], countdown: 3, goFlash: 0, elapsed: 0, raf: 0, last: 0, ended: false });
 
   useEffect(() => {
     let alive = true;
@@ -457,48 +417,41 @@ export default function Race() {
     };
   }, []);
 
-  const spawn = useCallback((slot: number): Racer | null => {
-    const s = state.current;
-    const ci = s.queue.shift();
-    if (ci === undefined) return null;
-    const lane = slot % 5;
-    const row = Math.floor(slot / 5);
-    return {
-      i: ci,
-      ci,
-      dist: 0,
-      speed: 0,
-      form: 0.9 + Math.random() * 0.3,
-      place: 0,
-      laneN: (lane - 2) / 2 + (Math.random() * 0.2 - 0.1),
-      startU: -0.02 * (row + 1), // just behind the start line
-      uAdj: 0,
-      dead: false,
-      pop: 0,
-      spawn: 1,
-    };
-  }, []);
-
   const startRace = useCallback(() => {
     const s = state.current;
     s.theme = THEMES[Math.floor(Math.random() * THEMES.length)];
-    s.queue = COUNTRIES.map((_, i) => i);
-    for (let i = s.queue.length - 1; i > 0; i--) {
+    // pick 10 distinct random countries
+    const pool = COUNTRIES.map((_, i) => i);
+    for (let i = pool.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
-      [s.queue[i], s.queue[j]] = [s.queue[j], s.queue[i]];
+      [pool[i], pool[j]] = [pool[j], pool[i]];
     }
-    s.active = [];
-    for (let k = 0; k < MAX_ACTIVE; k++) {
-      const r = spawn(k);
-      if (r) {
-        r.spawn = 0; // the starting grid is already lined up (no drop-in)
-        s.active.push(r);
-      }
-    }
+    const chosen = pool.slice(0, RACERS);
+    s.active = chosen.map((ci, k) => {
+      const lane = k % 5;
+      const row = Math.floor(k / 5);
+      return {
+        i: ci,
+        ci,
+        dist: 0,
+        speed: 0,
+        form: 0.9 + Math.random() * 0.3,
+        place: 0,
+        laneN: (lane - 2) / 2 + (Math.random() * 0.16 - 0.08),
+        startU: -0.02 * (row + 1),
+        uAdj: 0,
+        scale: 1,
+        effMul: 1,
+        effTime: 0,
+        obCool: 0,
+      };
+    });
     s.finishers = [];
-    s.fires = Array.from({ length: FIRES }, (_, k) => ({
-      u: (k + 0.5) / FIRES + (Math.random() - 0.5) * 0.12,
-      laneN: (Math.random() * 2 - 1) * 0.7,
+    // 10 obstacles: one of each type, then random, at random spots
+    s.obstacles = Array.from({ length: OBSTACLES }, (_, k) => ({
+      u: (k + 0.5) / OBSTACLES + (Math.random() - 0.5) * 0.06,
+      laneN: (Math.random() * 2 - 1) * 0.72,
+      type: k < OB_TYPES.length ? OB_TYPES[k] : OB_TYPES[Math.floor(Math.random() * OB_TYPES.length)],
     }));
     s.countdown = 3;
     s.goFlash = 0;
@@ -507,7 +460,7 @@ export default function Race() {
     s.last = 0;
     setPodium([]);
     setPhase("racing");
-  }, [spawn]);
+  }, []);
 
   useEffect(() => {
     if (phase !== "racing") return;
@@ -515,7 +468,7 @@ export default function Race() {
     if (!canvas) return;
     const ctx = canvas.getContext("2d")!;
     const s = state.current;
-    if (s.active.length === 0 && s.finishers.length === 0) startRace();
+    if (s.active.length === 0) startRace();
 
     let dpr = 1;
     const resize = () => {
@@ -542,32 +495,32 @@ export default function Race() {
           st.elapsed += dt;
           const spread = g.bandHalf - g.size * 0.5;
           for (const r of st.active) {
-            if (r.dead || r.place > 0) continue;
+            if (r.place > 0) continue;
+            r.effTime = Math.max(0, r.effTime - dt);
+            r.obCool = Math.max(0, r.obCool - dt);
             const u0 = uOf(r);
-            stepRacer(r, dt, st.elapsed);
+            const slow = (r.effTime > 0 ? r.effMul : 1) / r.scale; // small=fast, big=slow
+            stepRacer(r, dt, st.elapsed, undefined, slow);
             const u1 = uOf(r);
-            // fire pops - only if the marble rolls right over the small fire
-            for (const fire of st.fires) {
-              const near = Math.abs(r.laneN - fire.laneN) * spread < g.size * 0.85;
-              if (near && crossed(u0, u1, fire.u) && Math.random() < POP_CHANCE) {
-                r.dead = true;
-                r.pop = 1;
-                break;
+            // obstacles change speed/size, never remove
+            if (r.obCool <= 0) {
+              for (const ob of st.obstacles) {
+                const near = Math.abs(r.laneN - ob.laneN) * spread < g.size * 0.85;
+                if (near && crossed(u0, u1, ob.u)) {
+                  const def = OB[ob.type];
+                  if (def.mul) {
+                    r.effMul = def.mul;
+                    r.effTime = def.time ?? 1;
+                  }
+                  if (def.scale) r.scale = Math.max(0.62, Math.min(1.5, r.scale * def.scale));
+                  r.obCool = 0.35;
+                  break;
+                }
               }
             }
-            // finished a full race?
-            if (!r.dead && r.dist >= FINISH) {
+            if (r.dist >= FINISH) {
               r.place = st.finishers.length + 1;
               st.finishers.push(r.ci);
-            }
-          }
-          // replace anyone who left (popped fully or finished) - keep the road full
-          for (let k = 0; k < st.active.length; k++) {
-            const r = st.active[k];
-            if (r.place > 0 || (r.dead && r.pop <= 0)) {
-              const next = spawn(k);
-              if (next) st.active[k] = next;
-              else st.active.splice(k--, 1);
             }
           }
           if (st.finishers.length >= NEED) {
@@ -581,25 +534,22 @@ export default function Race() {
           }
         }
       }
-      // pop timers always run
-      for (const r of st.active) if (r.pop > 0) r.pop = Math.max(0, r.pop - dt * 2.2);
-      for (const r of st.active) if (r.spawn > 0) r.spawn = Math.max(0, r.spawn - dt * 3);
 
       separate(st.active, g);
       drawScenery(ctx, g);
       drawTrack(ctx, g);
-      drawFires(ctx, g, st.fires, st.elapsed);
+      drawObstacles(ctx, g, st.obstacles);
       drawFinish(ctx, g);
       drawMarbles(ctx, g, st.active, st.sprites);
       if (st.countdown > 0 || st.goFlash > 0) {
         drawCountdown(ctx, g, st.countdown, st.goFlash);
       } else {
-        const racing = st.active.filter((r) => !r.dead && r.place === 0);
+        const racing = st.active.filter((r) => r.place === 0);
         const top = [
           ...st.finishers,
           ...racing.sort((a, b) => b.dist - a.dist).map((r) => r.ci),
         ].slice(0, 3);
-        drawTop3(ctx, g, top, st.sprites, st.queue.length + racing.length);
+        drawTop3(ctx, g, top, st.sprites);
       }
 
       st.raf = requestAnimationFrame(draw);
@@ -610,14 +560,14 @@ export default function Race() {
       cancelAnimationFrame(s.raf);
       window.removeEventListener("resize", resize);
     };
-  }, [phase, startRace, spawn]);
+  }, [phase, startRace]);
 
   return (
     <main className="relative h-[100dvh] w-full overflow-hidden bg-black">
       <canvas
         ref={canvasRef}
         role="img"
-        aria-label="Live race of country flag marbles around a track, dodging fires"
+        aria-label="Live race of ten country flag marbles around a track with obstacles"
         className="block h-full w-full"
       />
       <p className="sr-only" aria-live="polite" role="status">
@@ -626,7 +576,7 @@ export default function Race() {
 
       {phase === "loading" && (
         <div className="absolute inset-0 flex items-center justify-center text-white/70">
-          <p className="text-lg font-semibold">Loading 194 racers…</p>
+          <p className="text-lg font-semibold">Loading racers…</p>
         </div>
       )}
 
