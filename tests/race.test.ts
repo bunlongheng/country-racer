@@ -73,3 +73,35 @@ test("markFinishers continues numbering from the running count", () => {
   assert.equal(count, 3);
   assert.equal(racers[0].place, 3);
 });
+
+test("markFinishers is a no-op when nobody has crossed", () => {
+  const racers = [mk({ dist: FINISH - 1 }), mk({ dist: 10 })];
+  assert.equal(markFinishers(racers, FINISH, 0), 0);
+  assert.ok(racers.every((r) => r.place === 0));
+});
+
+test("wobble is deterministic for the same seed and time", () => {
+  assert.equal(wobble(7, 3.5), wobble(7, 3.5));
+  assert.notEqual(wobble(7, 3.5), wobble(8, 3.5));
+});
+
+test("a full simulated race always crowns 3 finishers within ~55s", () => {
+  const racers: Racer[] = Array.from({ length: 194 }, (_, i) => ({
+    i,
+    dist: 0,
+    speed: 0,
+    form: 0.9 + ((i * 37) % 30) / 100, // deterministic spread of form
+    place: 0,
+  }));
+  let finished = 0;
+  let t = 0;
+  const dt = 1 / 60;
+  while (finished < 3 && t < 90) {
+    for (const r of racers) stepRacer(r, dt, t);
+    finished = markFinishers(racers, FINISH, finished);
+    t += dt;
+  }
+  assert.ok(finished >= 3, "at least 3 must finish");
+  assert.ok(t >= 25 && t <= 60, `race length out of 25-60s window: ${t.toFixed(1)}s`);
+  assert.equal(standings(racers).length, 194);
+});

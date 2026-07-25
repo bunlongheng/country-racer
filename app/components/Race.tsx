@@ -67,6 +67,7 @@ export default function Race() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [phase, setPhase] = useState<"loading" | "racing" | "done">("loading");
   const [podium, setPodium] = useState<Winner[]>([]);
+  const [announce, setAnnounce] = useState("");
   const state = useRef<{
     sprites: HTMLCanvasElement[];
     racers: LaneRacer[];
@@ -163,7 +164,11 @@ export default function Race() {
         if (st.finished >= 3) {
           st.ended = true;
           const order = standings(st.racers).slice(0, 3);
-          setPodium(order.map((idx, k) => ({ country: COUNTRIES[st.racers[idx].i], place: k + 1 })));
+          const top = order.map((idx, k) => ({ country: COUNTRIES[st.racers[idx].i], place: k + 1 }));
+          setPodium(top);
+          setAnnounce(
+            `Race finished. Gold ${top[0].country.name}, silver ${top[1].country.name}, bronze ${top[2].country.name}.`,
+          );
           setPhase("done");
         }
       }
@@ -284,7 +289,15 @@ export default function Race() {
 
   return (
     <main className="relative h-[100dvh] w-full overflow-hidden bg-black">
-      <canvas ref={canvasRef} className="block h-full w-full" />
+      <canvas
+        ref={canvasRef}
+        role="img"
+        aria-label="Live race of all 194 country flag marbles around an oval track"
+        className="block h-full w-full"
+      />
+      <p className="sr-only" aria-live="polite" role="status">
+        {announce}
+      </p>
 
       {phase === "loading" && (
         <div className="absolute inset-0 flex items-center justify-center text-white/70">
