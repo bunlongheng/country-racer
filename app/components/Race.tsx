@@ -63,6 +63,135 @@ function bakeMarble(img: HTMLImageElement): HTMLCanvasElement {
   return c;
 }
 
+const CHINA_IDX = COUNTRIES.findIndex((c) => c.code === CHINA);
+
+// Frame geometry, recomputed each draw so the track is always responsive.
+type Geo = {
+  W: number;
+  H: number;
+  cx: number;
+  cy: number;
+  rx: number;
+  ry: number;
+  band: number;
+  size: number;
+  dpr: number;
+};
+
+type Ctx = CanvasRenderingContext2D;
+type Sprites = HTMLCanvasElement[];
+
+function drawTrack(ctx: Ctx, g: Geo) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.ellipse(g.cx, g.cy, g.rx + g.band, g.ry + g.band, 0, 0, Math.PI * 2);
+  ctx.ellipse(g.cx, g.cy, g.rx - g.band, g.ry - g.band, 0, 0, Math.PI * 2);
+  ctx.fillStyle = "#12141c";
+  ctx.fill("evenodd");
+  ctx.lineWidth = 2 * g.dpr;
+  ctx.strokeStyle = "rgba(255,255,255,0.12)";
+  ctx.beginPath();
+  ctx.ellipse(g.cx, g.cy, g.rx + g.band, g.ry + g.band, 0, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.ellipse(g.cx, g.cy, g.rx - g.band, g.ry - g.band, 0, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawObstacle(ctx: Ctx, g: Geo) {
+  const a0 = OBS_START * Math.PI * 2 - Math.PI / 2;
+  const a1 = OBS_END * Math.PI * 2 - Math.PI / 2;
+  ctx.save();
+  ctx.beginPath();
+  ctx.ellipse(g.cx, g.cy, g.rx + g.band, g.ry + g.band, 0, a0, a1);
+  ctx.ellipse(g.cx, g.cy, g.rx - g.band, g.ry - g.band, 0, a1, a0, true);
+  ctx.closePath();
+  ctx.fillStyle = "rgba(220,60,40,0.28)";
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawFinish(ctx: Ctx, g: Geo) {
+  const fa = -Math.PI / 2;
+  ctx.save();
+  ctx.lineWidth = 4 * g.dpr;
+  ctx.setLineDash([6 * g.dpr, 6 * g.dpr]);
+  ctx.strokeStyle = "rgba(255,255,255,0.85)";
+  ctx.beginPath();
+  ctx.moveTo(g.cx + (g.rx - g.band) * Math.cos(fa), g.cy + (g.ry - g.band) * Math.sin(fa));
+  ctx.lineTo(g.cx + (g.rx + g.band) * Math.cos(fa), g.cy + (g.ry + g.band) * Math.sin(fa));
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawCenter(ctx: Ctx, g: Geo, sprites: Sprites, elapsed: number) {
+  const emblem = sprites[CHINA_IDX];
+  const es = Math.min(g.rx, g.ry) * 0.7;
+  if (emblem && emblem.width)
+    ctx.drawImage(emblem, g.cx - es / 2, g.cy - es / 2 - es * 0.1, es, es);
+  ctx.fillStyle = "rgba(255,255,255,0.9)";
+  ctx.font = `700 ${Math.round(g.size * 0.9)}px var(--font-display), sans-serif`;
+  ctx.textAlign = "center";
+  ctx.fillText("RACING AT CHINA", g.cx, g.cy + es * 0.55);
+  ctx.fillStyle = "rgba(255,255,255,0.45)";
+  ctx.font = `500 ${Math.round(g.size * 0.6)}px var(--font-display), sans-serif`;
+  ctx.fillText(`${elapsed.toFixed(1)}s`, g.cx, g.cy + es * 0.55 + g.size * 0.9);
+}
+
+function drawMarbles(
+  ctx: Ctx,
+  g: Geo,
+  racers: LaneRacer[],
+  sprites: Sprites,
+  order: number[],
+  elapsed: number,
+) {
+  const rankOf = new Map<number, number>();
+  order.forEach((idx, k) => rankOf.set(idx, k));
+  for (let idx = 0; idx < racers.length; idx++) {
+    const r = racers[idx];
+    const u = (((r.dist % TRACK_LEN) + TRACK_LEN) % TRACK_LEN) / TRACK_LEN;
+    const ang = u * Math.PI * 2 - Math.PI / 2;
+    const off = r.laneN * g.band * 0.82 + Math.sin(elapsed * 2 + r.i) * g.band * 0.08;
+    const x = g.cx + (g.rx + off) * Math.cos(ang);
+    const y = g.cy + (g.ry + off) * Math.sin(ang);
+    const sp = sprites[r.i];
+    const rank = rankOf.get(idx) ?? 999;
+    const ms = rank < 3 ? g.size * 1.25 : g.size;
+    if (sp && sp.width) ctx.drawImage(sp, x - ms / 2, y - ms / 2, ms, ms);
+    if (rank < 3) {
+      ctx.beginPath();
+      ctx.arc(x, y, ms / 2 + 1.5 * g.dpr, 0, Math.PI * 2);
+      ctx.lineWidth = 3 * g.dpr;
+      ctx.strokeStyle = ["#ffd24a", "#cfd6e0", "#e0a06a"][rank];
+      ctx.stroke();
+    }
+  }
+}
+
+function drawStandings(ctx: Ctx, g: Geo, racers: LaneRacer[], sprites: Sprites, order: number[]) {
+  const pad = 12 * g.dpr;
+  const rowH = g.size * 1.15;
+  ctx.textAlign = "left";
+  ctx.font = `600 ${Math.round(g.size * 0.62)}px var(--font-display), sans-serif`;
+  for (let k = 0; k < 5 && k < order.length; k++) {
+    const r = racers[order[k]];
+    const y = pad + k * rowH;
+    const sp = sprites[r.i];
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    ctx.fillText(`${k + 1}`, pad, y + rowH * 0.55);
+    if (sp && sp.width) ctx.drawImage(sp, pad + g.size * 0.8, y, rowH * 0.85, rowH * 0.85);
+    const lap = Math.min(LAPS, Math.floor(r.dist / TRACK_LEN) + 1);
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.fillText(
+      `${COUNTRIES[r.i].name}  ·  lap ${lap}/${LAPS}`,
+      pad + g.size * 0.8 + rowH,
+      y + rowH * 0.55,
+    );
+  }
+}
+
 export default function Race() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [phase, setPhase] = useState<"loading" | "racing" | "done">("loading");
@@ -145,18 +274,22 @@ export default function Race() {
 
       const W = canvas.width;
       const H = canvas.height;
-      const cx = W / 2;
-      const cy = H / 2;
-      const rx = W * 0.4;
-      const ry = H * 0.34;
-      const band = Math.min(rx, ry) * 0.34;
-      const size = Math.max(14 * dpr, Math.min(W, H) * 0.04);
+      const g: Geo = {
+        W,
+        H,
+        cx: W / 2,
+        cy: H / 2,
+        rx: W * 0.4,
+        ry: H * 0.34,
+        band: Math.min(W * 0.4, H * 0.34) * 0.34,
+        size: Math.max(14 * dpr, Math.min(W, H) * 0.04),
+        dpr,
+      };
 
       if (!st.ended) {
         st.elapsed += dt;
-        const racers = st.racers;
-        for (const r of racers) {
-          const u = ((r.dist % TRACK_LEN) + TRACK_LEN) % TRACK_LEN / TRACK_LEN;
+        for (const r of st.racers) {
+          const u = ((((r.dist % TRACK_LEN) + TRACK_LEN) % TRACK_LEN) / TRACK_LEN);
           const slow = u >= OBS_START && u <= OBS_END ? 0.5 : 1;
           stepRacer(r, dt, st.elapsed, undefined, slow);
         }
@@ -173,109 +306,14 @@ export default function Race() {
         }
       }
 
-      // background
       ctx.clearRect(0, 0, W, H);
-
-      // track ring (even-odd fill = oval band)
-      ctx.save();
-      ctx.beginPath();
-      ctx.ellipse(cx, cy, rx + band, ry + band, 0, 0, Math.PI * 2);
-      ctx.ellipse(cx, cy, rx - band, ry - band, 0, 0, Math.PI * 2);
-      ctx.fillStyle = "#12141c";
-      ctx.fill("evenodd");
-      // track edges
-      ctx.lineWidth = 2 * dpr;
-      ctx.strokeStyle = "rgba(255,255,255,0.12)";
-      ctx.beginPath();
-      ctx.ellipse(cx, cy, rx + band, ry + band, 0, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.ellipse(cx, cy, rx - band, ry - band, 0, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
-
-      // obstacle band (the "Great Wall" hurdle)
-      const a0 = OBS_START * Math.PI * 2 - Math.PI / 2;
-      const a1 = OBS_END * Math.PI * 2 - Math.PI / 2;
-      ctx.save();
-      ctx.beginPath();
-      ctx.ellipse(cx, cy, rx + band, ry + band, 0, a0, a1);
-      ctx.ellipse(cx, cy, rx - band, ry - band, 0, a1, a0, true);
-      ctx.closePath();
-      ctx.fillStyle = "rgba(220,60,40,0.28)";
-      ctx.fill();
-      ctx.restore();
-
-      // finish line at the top (u = 0)
-      const fa = -Math.PI / 2;
-      ctx.save();
-      ctx.lineWidth = 4 * dpr;
-      ctx.setLineDash([6 * dpr, 6 * dpr]);
-      ctx.strokeStyle = "rgba(255,255,255,0.85)";
-      ctx.beginPath();
-      ctx.moveTo(cx + (rx - band) * Math.cos(fa), cy + (ry - band) * Math.sin(fa));
-      ctx.lineTo(cx + (rx + band) * Math.cos(fa), cy + (ry + band) * Math.sin(fa));
-      ctx.stroke();
-      ctx.restore();
-
-      // center emblem: host = China marble + label
-      const chinaIdx = COUNTRIES.findIndex((c) => c.code === CHINA);
-      const emblem = st.sprites[chinaIdx];
-      const es = Math.min(rx, ry) * 0.7;
-      if (emblem && emblem.width) ctx.drawImage(emblem, cx - es / 2, cy - es / 2 - es * 0.1, es, es);
-      ctx.fillStyle = "rgba(255,255,255,0.9)";
-      ctx.font = `700 ${Math.round(size * 0.9)}px var(--font-display), sans-serif`;
-      ctx.textAlign = "center";
-      ctx.fillText("RACING AT CHINA", cx, cy + es * 0.55);
-      ctx.fillStyle = "rgba(255,255,255,0.45)";
-      ctx.font = `500 ${Math.round(size * 0.6)}px var(--font-display), sans-serif`;
-      ctx.fillText(`${st.elapsed.toFixed(1)}s`, cx, cy + es * 0.55 + size * 0.9);
-
-      // marbles
+      drawTrack(ctx, g);
+      drawObstacle(ctx, g);
+      drawFinish(ctx, g);
+      drawCenter(ctx, g, st.sprites, st.elapsed);
       const order = standings(st.racers);
-      const rankOf = new Map<number, number>();
-      order.forEach((idx, k) => rankOf.set(idx, k));
-      const racers = st.racers;
-      for (let idx = 0; idx < racers.length; idx++) {
-        const r = racers[idx];
-        const u = (((r.dist % TRACK_LEN) + TRACK_LEN) % TRACK_LEN) / TRACK_LEN;
-        const ang = u * Math.PI * 2 - Math.PI / 2;
-        const off = r.laneN * band * 0.82 + Math.sin(st.elapsed * 2 + r.i) * band * 0.08;
-        const x = cx + (rx + off) * Math.cos(ang);
-        const y = cy + (ry + off) * Math.sin(ang);
-        const sp = st.sprites[r.i];
-        const rank = rankOf.get(idx) ?? 999;
-        const ms = rank < 3 ? size * 1.25 : size;
-        if (sp && sp.width) ctx.drawImage(sp, x - ms / 2, y - ms / 2, ms, ms);
-        if (rank < 3) {
-          ctx.beginPath();
-          ctx.arc(x, y, ms / 2 + 1.5 * dpr, 0, Math.PI * 2);
-          ctx.lineWidth = 3 * dpr;
-          ctx.strokeStyle = ["#ffd24a", "#cfd6e0", "#e0a06a"][rank];
-          ctx.stroke();
-        }
-      }
-
-      // live standings panel (top 5)
-      const pad = 12 * dpr;
-      const rowH = size * 1.15;
-      ctx.textAlign = "left";
-      ctx.font = `600 ${Math.round(size * 0.62)}px var(--font-display), sans-serif`;
-      for (let k = 0; k < 5 && k < order.length; k++) {
-        const r = racers[order[k]];
-        const y = pad + k * rowH;
-        const sp = st.sprites[r.i];
-        ctx.fillStyle = "rgba(255,255,255,0.85)";
-        ctx.fillText(`${k + 1}`, pad, y + rowH * 0.55);
-        if (sp && sp.width) ctx.drawImage(sp, pad + size * 0.8, y, rowH * 0.85, rowH * 0.85);
-        const lap = Math.min(LAPS, Math.floor(r.dist / TRACK_LEN) + 1);
-        ctx.fillStyle = "rgba(255,255,255,0.9)";
-        ctx.fillText(
-          `${COUNTRIES[r.i].name}  ·  lap ${lap}/${LAPS}`,
-          pad + size * 0.8 + rowH,
-          y + rowH * 0.55,
-        );
-      }
+      drawMarbles(ctx, g, st.racers, st.sprites, order, st.elapsed);
+      drawStandings(ctx, g, st.racers, st.sprites, order);
 
       st.raf = requestAnimationFrame(draw);
     };
