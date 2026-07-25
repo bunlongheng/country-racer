@@ -5,7 +5,6 @@ import Image from "next/image";
 import { COUNTRIES, type Country } from "../data/countries";
 import {
   FINISH,
-  LAPS,
   TRACK_LEN,
   markFinishers,
   standings,
@@ -14,13 +13,32 @@ import {
 } from "@/lib/race";
 
 const SPRITE = 96; // baked marble sprite resolution (px)
-const OBS_START = 0.44; // "Great Wall" hurdle band (fraction of a lap)
-const OBS_END = 0.56;
-const CHINA = "cn";
+const OBS_START = 0.46; // hurdle band (fraction of a lap)
+const OBS_END = 0.54;
+const FONT = "system-ui, -apple-system, 'Segoe UI', sans-serif";
 
 // A racer plus its view-only lane offset across the track band.
 type LaneRacer = Racer & { laneN: number };
 type Winner = { country: Country; place: number };
+
+type Theme = {
+  name: string;
+  bg: string;
+  track: string;
+  line: string;
+  dashed: boolean;
+  edge: string;
+  decor: "stars" | "trees" | "dots" | "none";
+  decorColor: string;
+};
+
+// Randomized stages - a different scene every race.
+const THEMES: Theme[] = [
+  { name: "Night", bg: "#04050a", track: "#191c26", line: "rgba(255,255,255,0.5)", dashed: true, edge: "rgba(255,255,255,0.18)", decor: "stars", decorColor: "rgba(255,255,255,0.8)" },
+  { name: "Grass", bg: "#08160d", track: "#2b2f38", line: "rgba(255,255,255,0.5)", dashed: true, edge: "rgba(255,255,255,0.16)", decor: "trees", decorColor: "#2e8b45" },
+  { name: "Neon", bg: "#070512", track: "#151129", line: "rgba(120,225,255,0.7)", dashed: false, edge: "rgba(140,90,255,0.6)", decor: "dots", decorColor: "rgba(120,225,255,0.5)" },
+  { name: "Desert", bg: "#170f04", track: "#332d22", line: "rgba(255,238,200,0.45)", dashed: true, edge: "rgba(255,255,255,0.14)", decor: "none", decorColor: "rgba(0,0,0,0)" },
+];
 
 // Bake a country's flag into a glossy marble sprite once, then just blit it.
 function bakeMarble(img: HTMLImageElement): HTMLCanvasElement {
@@ -33,19 +51,16 @@ function bakeMarble(img: HTMLImageElement): HTMLCanvasElement {
   g.beginPath();
   g.arc(r, r, r - 2, 0, Math.PI * 2);
   g.clip();
-  // cover-fit the flag (flags are ~3:2, so crop sides)
   const s = Math.max(SPRITE / img.width, SPRITE / img.height);
   const w = img.width * s;
   const h = img.height * s;
   g.drawImage(img, (SPRITE - w) / 2, (SPRITE - h) / 2, w, h);
-  // spherical rim shading
   const rim = g.createRadialGradient(r, r, r * 0.35, r, r, r);
   rim.addColorStop(0, "rgba(0,0,0,0)");
   rim.addColorStop(0.75, "rgba(0,0,0,0.05)");
   rim.addColorStop(1, "rgba(0,0,0,0.55)");
   g.fillStyle = rim;
   g.fillRect(0, 0, SPRITE, SPRITE);
-  // glossy highlight, top-left
   const hi = g.createRadialGradient(r * 0.62, r * 0.55, 1, r * 0.62, r * 0.55, r * 0.9);
   hi.addColorStop(0, "rgba(255,255,255,0.85)");
   hi.addColorStop(0.18, "rgba(255,255,255,0.35)");
@@ -54,7 +69,6 @@ function bakeMarble(img: HTMLImageElement): HTMLCanvasElement {
   g.fillRect(0, 0, SPRITE, SPRITE);
   g.restore();
 
-  // crisp outline
   g.beginPath();
   g.arc(r, r, r - 2, 0, Math.PI * 2);
   g.lineWidth = 2;
@@ -63,102 +77,195 @@ function bakeMarble(img: HTMLImageElement): HTMLCanvasElement {
   return c;
 }
 
-const CHINA_IDX = COUNTRIES.findIndex((c) => c.code === CHINA);
+// --- Track geometry: a rounded-rect loop hugging the screen edges ---------
 
-// Frame geometry, recomputed each draw so the track is always responsive.
+type Seg = { len: number; at: (t: number) => { x: number; y: number; nx: number; ny: number } };
 type Geo = {
   W: number;
   H: number;
-  cx: number;
-  cy: number;
-  rx: number;
-  ry: number;
-  band: number;
-  size: number;
   dpr: number;
+  size: number;
+  bandHalf: number;
+  perim: number;
+  segs: Seg[];
+  cl: { L: number; T: number; R: number; B: number; r: number };
+  hole: { x: number; y: number; w: number; h: number };
+  theme: Theme;
 };
+
+function buildGeo(W: number, H: number, dpr: number, theme: Theme): Geo {
+  const m = Math.min(W, H);
+  const inset = m * 0.045;
+  const band = m * 0.19; // wide road so the flag marbles are big and clear
+  const bandHalf = band / 2;
+  const size = band * 0.52;
+  const L = inset + bandHalf;
+  const T = inset + bandHalf;
+  const R = W - inset - bandHalf;
+  const B = H - inset - bandHalf;
+  const r = Math.min(R - L, B - T) * 0.16;
+  const cx = (L + R) / 2;
+
+  const straight = (x0: number, y0: number, x1: number, y1: number, nx: number, ny: number): Seg => ({
+    len: Math.hypot(x1 - x0, y1 - y0),
+    at: (t) => ({ x: x0 + (x1 - x0) * t, y: y0 + (y1 - y0) * t, nx, ny }),
+  });
+  const arc = (ccx: number, ccy: number, a0: number, a1: number): Seg => ({
+    len: Math.abs(a1 - a0) * r,
+    at: (t) => {
+      const a = a0 + (a1 - a0) * t;
+      return { x: ccx + Math.cos(a) * r, y: ccy + Math.sin(a) * r, nx: -Math.cos(a), ny: -Math.sin(a) };
+    },
+  });
+
+  // clockwise from top-center (finish line is at u = 0)
+  const segs: Seg[] = [
+    straight(cx, T, R - r, T, 0, 1),
+    arc(R - r, T + r, -Math.PI / 2, 0),
+    straight(R, T + r, R, B - r, -1, 0),
+    arc(R - r, B - r, 0, Math.PI / 2),
+    straight(R - r, B, L + r, B, 0, -1),
+    arc(L + r, B - r, Math.PI / 2, Math.PI),
+    straight(L, B - r, L, T + r, 1, 0),
+    arc(L + r, T + r, Math.PI, Math.PI * 1.5),
+    straight(L + r, T, cx, T, 0, 1),
+  ];
+  const perim = segs.reduce((sum, seg) => sum + seg.len, 0);
+  const hole = { x: L + bandHalf, y: T + bandHalf, w: R - L - band, h: B - T - band };
+  return { W, H, dpr, size, bandHalf, perim, segs, cl: { L, T, R, B, r }, hole, theme };
+}
+
+function pathPoint(geo: Geo, u: number) {
+  let d = (((u % 1) + 1) % 1) * geo.perim;
+  for (const seg of geo.segs) {
+    if (d <= seg.len) return seg.at(seg.len === 0 ? 0 : d / seg.len);
+    d -= seg.len;
+  }
+  return geo.segs[0].at(0);
+}
 
 type Ctx = CanvasRenderingContext2D;
 type Sprites = HTMLCanvasElement[];
 
+// small deterministic hash so decor never flickers frame to frame
+function h1(i: number, salt: number) {
+  const x = Math.sin(i * 12.9898 + salt * 78.233) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+function drawScenery(ctx: Ctx, g: Geo) {
+  ctx.fillStyle = g.theme.bg;
+  ctx.fillRect(0, 0, g.W, g.H);
+  const t = g.theme;
+  if (t.decor === "stars" || t.decor === "dots") {
+    const n = 70;
+    for (let i = 0; i < n; i++) {
+      const x = h1(i, 1) * g.W;
+      const y = h1(i, 2) * g.H;
+      const rad = (0.6 + h1(i, 3) * 1.6) * g.dpr;
+      ctx.beginPath();
+      ctx.arc(x, y, rad, 0, Math.PI * 2);
+      ctx.fillStyle = t.decorColor;
+      ctx.fill();
+    }
+  } else if (t.decor === "trees") {
+    const n = 22;
+    for (let i = 0; i < n; i++) {
+      const x = h1(i, 1) * g.W;
+      const y = h1(i, 2) * g.H;
+      const s = (8 + h1(i, 3) * 10) * g.dpr;
+      ctx.fillStyle = "#6b4a2b";
+      ctx.fillRect(x - s * 0.12, y, s * 0.24, s * 0.7);
+      ctx.beginPath();
+      ctx.moveTo(x, y - s);
+      ctx.lineTo(x - s * 0.6, y + s * 0.1);
+      ctx.lineTo(x + s * 0.6, y + s * 0.1);
+      ctx.closePath();
+      ctx.fillStyle = t.decorColor;
+      ctx.fill();
+    }
+  }
+}
+
+function trackPath(ctx: Ctx, g: Geo) {
+  ctx.beginPath();
+  ctx.roundRect(g.cl.L, g.cl.T, g.cl.R - g.cl.L, g.cl.B - g.cl.T, g.cl.r);
+}
+
 function drawTrack(ctx: Ctx, g: Geo) {
   ctx.save();
-  ctx.beginPath();
-  ctx.ellipse(g.cx, g.cy, g.rx + g.band, g.ry + g.band, 0, 0, Math.PI * 2);
-  ctx.ellipse(g.cx, g.cy, g.rx - g.band, g.ry - g.band, 0, 0, Math.PI * 2);
-  ctx.fillStyle = "#12141c";
-  ctx.fill("evenodd");
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  // band
+  trackPath(ctx, g);
+  ctx.lineWidth = g.bandHalf * 2;
+  ctx.strokeStyle = g.theme.track;
+  ctx.stroke();
+  // edges
+  trackPath(ctx, g);
+  ctx.lineWidth = g.bandHalf * 2 + 2 * g.dpr;
+  ctx.strokeStyle = g.theme.edge;
+  ctx.globalCompositeOperation = "destination-over";
+  ctx.stroke();
+  ctx.globalCompositeOperation = "source-over";
+  // centre lane line
+  trackPath(ctx, g);
   ctx.lineWidth = 2 * g.dpr;
-  ctx.strokeStyle = "rgba(255,255,255,0.12)";
-  ctx.beginPath();
-  ctx.ellipse(g.cx, g.cy, g.rx + g.band, g.ry + g.band, 0, 0, Math.PI * 2);
+  ctx.setLineDash(g.theme.dashed ? [10 * g.dpr, 12 * g.dpr] : []);
+  ctx.strokeStyle = g.theme.line;
   ctx.stroke();
-  ctx.beginPath();
-  ctx.ellipse(g.cx, g.cy, g.rx - g.band, g.ry - g.band, 0, 0, Math.PI * 2);
-  ctx.stroke();
+  ctx.setLineDash([]);
   ctx.restore();
 }
 
 function drawObstacle(ctx: Ctx, g: Geo) {
-  const a0 = OBS_START * Math.PI * 2 - Math.PI / 2;
-  const a1 = OBS_END * Math.PI * 2 - Math.PI / 2;
+  const N = 18;
   ctx.save();
   ctx.beginPath();
-  ctx.ellipse(g.cx, g.cy, g.rx + g.band, g.ry + g.band, 0, a0, a1);
-  ctx.ellipse(g.cx, g.cy, g.rx - g.band, g.ry - g.band, 0, a1, a0, true);
+  for (let i = 0; i <= N; i++) {
+    const p = pathPoint(g, OBS_START + ((OBS_END - OBS_START) * i) / N);
+    const x = p.x + p.nx * g.bandHalf;
+    const y = p.y + p.ny * g.bandHalf;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  for (let i = N; i >= 0; i--) {
+    const p = pathPoint(g, OBS_START + ((OBS_END - OBS_START) * i) / N);
+    ctx.lineTo(p.x - p.nx * g.bandHalf, p.y - p.ny * g.bandHalf);
+  }
   ctx.closePath();
-  ctx.fillStyle = "rgba(220,60,40,0.28)";
+  ctx.fillStyle = "rgba(230,70,40,0.32)";
   ctx.fill();
   ctx.restore();
 }
 
 function drawFinish(ctx: Ctx, g: Geo) {
-  const fa = -Math.PI / 2;
+  const p = pathPoint(g, 0);
   ctx.save();
   ctx.lineWidth = 4 * g.dpr;
   ctx.setLineDash([6 * g.dpr, 6 * g.dpr]);
-  ctx.strokeStyle = "rgba(255,255,255,0.85)";
+  ctx.strokeStyle = "rgba(255,255,255,0.9)";
   ctx.beginPath();
-  ctx.moveTo(g.cx + (g.rx - g.band) * Math.cos(fa), g.cy + (g.ry - g.band) * Math.sin(fa));
-  ctx.lineTo(g.cx + (g.rx + g.band) * Math.cos(fa), g.cy + (g.ry + g.band) * Math.sin(fa));
+  ctx.moveTo(p.x - p.nx * g.bandHalf, p.y - p.ny * g.bandHalf);
+  ctx.lineTo(p.x + p.nx * g.bandHalf, p.y + p.ny * g.bandHalf);
   ctx.stroke();
   ctx.restore();
 }
 
-function drawCenter(ctx: Ctx, g: Geo, sprites: Sprites, elapsed: number) {
-  const emblem = sprites[CHINA_IDX];
-  const es = Math.min(g.rx, g.ry) * 0.7;
-  if (emblem && emblem.width)
-    ctx.drawImage(emblem, g.cx - es / 2, g.cy - es / 2 - es * 0.1, es, es);
-  ctx.fillStyle = "rgba(255,255,255,0.9)";
-  ctx.font = `700 ${Math.round(g.size * 0.9)}px var(--font-display), sans-serif`;
-  ctx.textAlign = "center";
-  ctx.fillText("RACING AT CHINA", g.cx, g.cy + es * 0.55);
-  ctx.fillStyle = "rgba(255,255,255,0.45)";
-  ctx.font = `500 ${Math.round(g.size * 0.6)}px var(--font-display), sans-serif`;
-  ctx.fillText(`${elapsed.toFixed(1)}s`, g.cx, g.cy + es * 0.55 + g.size * 0.9);
-}
-
-function drawMarbles(
-  ctx: Ctx,
-  g: Geo,
-  racers: LaneRacer[],
-  sprites: Sprites,
-  order: number[],
-  elapsed: number,
-) {
+function drawMarbles(ctx: Ctx, g: Geo, racers: LaneRacer[], sprites: Sprites, order: number[], elapsed: number) {
   const rankOf = new Map<number, number>();
   order.forEach((idx, k) => rankOf.set(idx, k));
+  const spread = g.bandHalf - g.size * 0.5;
   for (let idx = 0; idx < racers.length; idx++) {
     const r = racers[idx];
     const u = (((r.dist % TRACK_LEN) + TRACK_LEN) % TRACK_LEN) / TRACK_LEN;
-    const ang = u * Math.PI * 2 - Math.PI / 2;
-    const off = r.laneN * g.band * 0.82 + Math.sin(elapsed * 2 + r.i) * g.band * 0.08;
-    const x = g.cx + (g.rx + off) * Math.cos(ang);
-    const y = g.cy + (g.ry + off) * Math.sin(ang);
+    const p = pathPoint(g, u);
+    const off = r.laneN * spread + Math.sin(elapsed * 2 + r.i) * g.size * 0.12;
+    const x = p.x + p.nx * off;
+    const y = p.y + p.ny * off;
     const sp = sprites[r.i];
     const rank = rankOf.get(idx) ?? 999;
-    const ms = rank < 3 ? g.size * 1.25 : g.size;
+    const ms = rank < 3 ? g.size * 1.3 : g.size;
     if (sp && sp.width) ctx.drawImage(sp, x - ms / 2, y - ms / 2, ms, ms);
     if (rank < 3) {
       ctx.beginPath();
@@ -170,26 +277,57 @@ function drawMarbles(
   }
 }
 
+// Live top-10 standings, drawn in the centre hole - rank + flag only, so the
+// panel stays narrow and the road can stay wide.
 function drawStandings(ctx: Ctx, g: Geo, racers: LaneRacer[], sprites: Sprites, order: number[]) {
-  const pad = 12 * g.dpr;
-  const rowH = g.size * 1.15;
-  ctx.textAlign = "left";
-  ctx.font = `600 ${Math.round(g.size * 0.62)}px var(--font-display), sans-serif`;
-  for (let k = 0; k < 5 && k < order.length; k++) {
+  const { hole } = g;
+  const N = Math.min(10, order.length);
+  const rowH = Math.min(hole.h / 13, g.size * 1.25);
+  const flag = rowH * 0.88;
+  const numW = rowH * 0.9;
+  const gap = rowH * 0.28;
+  const rowW = numW + gap + flag;
+  const listH = rowH * (N + 1.7);
+  const top = hole.y + (hole.h - listH) / 2;
+  const midX = hole.x + hole.w / 2;
+
+  ctx.save();
+  // narrow panel for readability
+  const panelW = rowW + rowH * 1.4;
+  ctx.fillStyle = "rgba(0,0,0,0.34)";
+  ctx.beginPath();
+  ctx.roundRect(midX - panelW / 2, top - rowH * 0.4, panelW, listH + rowH * 0.4, 16 * g.dpr);
+  ctx.fill();
+
+  ctx.textAlign = "center";
+  ctx.fillStyle = "rgba(255,255,255,0.92)";
+  ctx.font = `700 ${Math.round(rowH * 0.58)}px ${FONT}`;
+  ctx.fillText("TOP 10", midX, top + rowH * 0.55);
+
+  const medals = ["#ffd24a", "#cfd6e0", "#e0a06a"];
+  for (let k = 0; k < N; k++) {
     const r = racers[order[k]];
-    const y = pad + k * rowH;
+    const y = top + rowH * (k + 1.7);
+    const medal = k < 3 ? medals[k] : "rgba(255,255,255,0.8)";
+    const x = midX - rowW / 2;
+
+    ctx.textAlign = "right";
+    ctx.fillStyle = medal;
+    ctx.font = `700 ${Math.round(rowH * 0.62)}px ${FONT}`;
+    ctx.fillText(`${k + 1}`, x + numW * 0.85, y + flag * 0.66);
+
+    const fx = x + numW + gap;
     const sp = sprites[r.i];
-    ctx.fillStyle = "rgba(255,255,255,0.85)";
-    ctx.fillText(`${k + 1}`, pad, y + rowH * 0.55);
-    if (sp && sp.width) ctx.drawImage(sp, pad + g.size * 0.8, y, rowH * 0.85, rowH * 0.85);
-    const lap = Math.min(LAPS, Math.floor(r.dist / TRACK_LEN) + 1);
-    ctx.fillStyle = "rgba(255,255,255,0.9)";
-    ctx.fillText(
-      `${COUNTRIES[r.i].name}  ·  lap ${lap}/${LAPS}`,
-      pad + g.size * 0.8 + rowH,
-      y + rowH * 0.55,
-    );
+    if (sp && sp.width) ctx.drawImage(sp, fx, y, flag, flag);
+    if (k < 3) {
+      ctx.beginPath();
+      ctx.arc(fx + flag / 2, y + flag / 2, flag / 2 + 1.5 * g.dpr, 0, Math.PI * 2);
+      ctx.lineWidth = 2.5 * g.dpr;
+      ctx.strokeStyle = medal;
+      ctx.stroke();
+    }
   }
+  ctx.restore();
 }
 
 export default function Race() {
@@ -200,12 +338,13 @@ export default function Race() {
   const state = useRef<{
     sprites: HTMLCanvasElement[];
     racers: LaneRacer[];
+    theme: Theme;
     finished: number;
     elapsed: number;
     raf: number;
     last: number;
     ended: boolean;
-  }>({ sprites: [], racers: [], finished: 0, elapsed: 0, raf: 0, last: 0, ended: false });
+  }>({ sprites: [], racers: [], theme: THEMES[0], finished: 0, elapsed: 0, raf: 0, last: 0, ended: false });
 
   // Load flags + bake sprites once.
   useEffect(() => {
@@ -232,13 +371,14 @@ export default function Race() {
 
   const startRace = useCallback(() => {
     const s = state.current;
+    s.theme = THEMES[Math.floor(Math.random() * THEMES.length)];
     s.racers = COUNTRIES.map((_, i) => ({
       i,
-      dist: 0,
+      dist: Math.random() * 150, // small stagger so the field starts spread out
       speed: 0,
       form: 0.9 + Math.random() * 0.3,
       place: 0,
-      laneN: Math.random() * 2 - 1, // spreads racers across the track band
+      laneN: Math.random() * 2 - 1,
     }));
     s.finished = 0;
     s.elapsed = 0;
@@ -248,7 +388,6 @@ export default function Race() {
     setPhase("racing");
   }, []);
 
-  // The race loop.
   useEffect(() => {
     if (phase !== "racing") return;
     const canvas = canvasRef.current;
@@ -272,24 +411,12 @@ export default function Race() {
       const dt = Math.min((now - st.last) / 1000, 0.05);
       st.last = now;
 
-      const W = canvas.width;
-      const H = canvas.height;
-      const g: Geo = {
-        W,
-        H,
-        cx: W / 2,
-        cy: H / 2,
-        rx: W * 0.4,
-        ry: H * 0.34,
-        band: Math.min(W * 0.4, H * 0.34) * 0.34,
-        size: Math.max(14 * dpr, Math.min(W, H) * 0.04),
-        dpr,
-      };
+      const g = buildGeo(canvas.width, canvas.height, dpr, st.theme);
 
       if (!st.ended) {
         st.elapsed += dt;
         for (const r of st.racers) {
-          const u = ((((r.dist % TRACK_LEN) + TRACK_LEN) % TRACK_LEN) / TRACK_LEN);
+          const u = (((r.dist % TRACK_LEN) + TRACK_LEN) % TRACK_LEN) / TRACK_LEN;
           const slow = u >= OBS_START && u <= OBS_END ? 0.5 : 1;
           stepRacer(r, dt, st.elapsed, undefined, slow);
         }
@@ -306,11 +433,10 @@ export default function Race() {
         }
       }
 
-      ctx.clearRect(0, 0, W, H);
+      drawScenery(ctx, g);
       drawTrack(ctx, g);
       drawObstacle(ctx, g);
       drawFinish(ctx, g);
-      drawCenter(ctx, g, st.sprites, st.elapsed);
       const order = standings(st.racers);
       drawMarbles(ctx, g, st.racers, st.sprites, order, st.elapsed);
       drawStandings(ctx, g, st.racers, st.sprites, order);
@@ -330,7 +456,7 @@ export default function Race() {
       <canvas
         ref={canvasRef}
         role="img"
-        aria-label="Live race of all 194 country flag marbles around an oval track"
+        aria-label="Live race of all 194 country flag marbles around a track"
         className="block h-full w-full"
       />
       <p className="sr-only" aria-live="polite" role="status">
