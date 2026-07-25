@@ -95,10 +95,10 @@ type Geo = {
 
 function buildGeo(W: number, H: number, dpr: number, theme: Theme): Geo {
   const m = Math.min(W, H);
-  const inset = m * 0.045;
-  const band = m * 0.19; // wide road so the flag marbles are big and clear
+  const inset = m * 0.018; // hug the screen edge - waste no space
+  const band = m * 0.24; // wide road so the flag marbles are big and clear
   const bandHalf = band / 2;
-  const size = band * 0.52;
+  const size = band * 0.5;
   const L = inset + bandHalf;
   const T = inset + bandHalf;
   const R = W - inset - bandHalf;
@@ -282,27 +282,28 @@ function drawMarbles(ctx: Ctx, g: Geo, racers: LaneRacer[], sprites: Sprites, or
 function drawStandings(ctx: Ctx, g: Geo, racers: LaneRacer[], sprites: Sprites, order: number[]) {
   const { hole } = g;
   const N = Math.min(10, order.length);
-  const rowH = Math.min(hole.h / 13, g.size * 1.25);
-  const flag = rowH * 0.88;
-  const numW = rowH * 0.9;
-  const gap = rowH * 0.28;
+  // compact report - small rows so the road can be as big as possible
+  const rowH = Math.min(hole.h / 16, g.size * 0.62);
+  const flag = rowH * 0.82;
+  const numW = rowH * 0.78;
+  const gap = rowH * 0.24;
   const rowW = numW + gap + flag;
-  const listH = rowH * (N + 1.7);
+  const listH = rowH * (N + 1.6);
   const top = hole.y + (hole.h - listH) / 2;
   const midX = hole.x + hole.w / 2;
 
   ctx.save();
   // narrow panel for readability
-  const panelW = rowW + rowH * 1.4;
+  const panelW = rowW + rowH * 1.2;
   ctx.fillStyle = "rgba(0,0,0,0.34)";
   ctx.beginPath();
-  ctx.roundRect(midX - panelW / 2, top - rowH * 0.4, panelW, listH + rowH * 0.4, 16 * g.dpr);
+  ctx.roundRect(midX - panelW / 2, top - rowH * 0.35, panelW, listH + rowH * 0.35, 12 * g.dpr);
   ctx.fill();
 
   ctx.textAlign = "center";
   ctx.fillStyle = "rgba(255,255,255,0.92)";
-  ctx.font = `700 ${Math.round(rowH * 0.58)}px ${FONT}`;
-  ctx.fillText("TOP 10", midX, top + rowH * 0.55);
+  ctx.font = `700 ${Math.round(rowH * 0.62)}px ${FONT}`;
+  ctx.fillText("TOP 10", midX, top + rowH * 0.5);
 
   const medals = ["#ffd24a", "#cfd6e0", "#e0a06a"];
   for (let k = 0; k < N; k++) {
