@@ -10,7 +10,7 @@ export default function PodiumMarble3D({ code, hue }: { code: string; hue: numbe
   return (
     <Canvas
       dpr={[1, 2]}
-      camera={{ position: [0, 0, 2.6], fov: 42 }}
+      camera={{ position: [0, 0, 3.7], fov: 42 }}
       gl={{ antialias: true, alpha: true }}
     >
       <Suspense fallback={null}>
