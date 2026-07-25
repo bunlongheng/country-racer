@@ -17,9 +17,15 @@ const OBS_START = 0.46; // hurdle band (fraction of a lap)
 const OBS_END = 0.54;
 const FONT = "system-ui, -apple-system, 'Segoe UI', sans-serif";
 
-// A racer plus its view-only lane offset across the track band.
-type LaneRacer = Racer & { laneN: number };
+// A racer plus its view-only lane offset and start position around the loop.
+type LaneRacer = Racer & { laneN: number; startU: number };
 type Winner = { country: Country; place: number };
+
+// A racer's visual position around the loop (0..1). The field is spread by
+// startU so it is never one big pack; distance still decides the standings.
+function uOf(r: LaneRacer): number {
+  return (((r.dist / TRACK_LEN + r.startU) % 1) + 1) % 1;
+}
 
 type Theme = {
   name: string;
@@ -96,9 +102,9 @@ type Geo = {
 function buildGeo(W: number, H: number, dpr: number, theme: Theme): Geo {
   const m = Math.min(W, H);
   const inset = m * 0.018; // hug the screen edge - waste no space
-  const band = m * 0.24; // wide road so the flag marbles are big and clear
+  const band = m * 0.24; // wide road with many lanes so marbles never overlap
   const bandHalf = band / 2;
-  const size = band * 0.5;
+  const size = band * 0.2; // small marbles - every country stays visible
   const L = inset + bandHalf;
   const T = inset + bandHalf;
   const R = W - inset - bandHalf;
@@ -142,6 +148,50 @@ function pathPoint(geo: Geo, u: number) {
     d -= seg.len;
   }
   return geo.segs[0].at(0);
+}
+
+// Push overlapping marbles apart sideways (lateral only, so race distance is
+// never touched) until none of them overlap - realistic, and every flag stays
+// readable. Bucketed by arc position so it stays cheap for 194 racers.
+function separate(racers: LaneRacer[], g: Geo) {
+  const spread = g.bandHalf - g.size * 0.5;
+  if (spread <= 0) return;
+  const minD = g.size * 1.02;
+  const nb = Math.max(1, Math.floor(g.perim / (g.size * 1.2)));
+  const buckets: number[][] = Array.from({ length: nb }, () => []);
+  const a: number[] = new Array(racers.length);
+  const q: number[] = new Array(racers.length);
+  for (let i = 0; i < racers.length; i++) {
+    a[i] = uOf(racers[i]) * g.perim;
+    q[i] = racers[i].laneN * spread;
+    buckets[Math.min(nb - 1, Math.floor((a[i] / g.perim) * nb))].push(i);
+  }
+  for (let iter = 0; iter < 3; iter++) {
+    for (let b = 0; b < nb; b++) {
+      for (const i of buckets[b]) {
+        for (const nn of [b, (b + 1) % nb]) {
+          for (const j of buckets[nn]) {
+            if (j === i || (nn === b && j <= i)) continue;
+            let da = a[i] - a[j];
+            if (da > g.perim / 2) da -= g.perim;
+            else if (da < -g.perim / 2) da += g.perim;
+            const dq = q[i] - q[j];
+            const d2 = da * da + dq * dq;
+            if (d2 < minD * minD && d2 > 1e-9) {
+              const d = Math.sqrt(d2);
+              const push = (minD - d) / 2;
+              const dir = Math.abs(dq) < 1e-3 ? (i < j ? 1 : -1) : dq / d;
+              q[i] += dir * push;
+              q[j] -= dir * push;
+            }
+          }
+        }
+      }
+    }
+  }
+  for (let i = 0; i < racers.length; i++) {
+    racers[i].laneN = Math.max(-1, Math.min(1, q[i] / spread));
+  }
 }
 
 type Ctx = CanvasRenderingContext2D;
@@ -252,15 +302,14 @@ function drawFinish(ctx: Ctx, g: Geo) {
   ctx.restore();
 }
 
-function drawMarbles(ctx: Ctx, g: Geo, racers: LaneRacer[], sprites: Sprites, order: number[], elapsed: number) {
+function drawMarbles(ctx: Ctx, g: Geo, racers: LaneRacer[], sprites: Sprites, order: number[]) {
   const rankOf = new Map<number, number>();
   order.forEach((idx, k) => rankOf.set(idx, k));
   const spread = g.bandHalf - g.size * 0.5;
   for (let idx = 0; idx < racers.length; idx++) {
     const r = racers[idx];
-    const u = (((r.dist % TRACK_LEN) + TRACK_LEN) % TRACK_LEN) / TRACK_LEN;
-    const p = pathPoint(g, u);
-    const off = r.laneN * spread + Math.sin(elapsed * 2 + r.i) * g.size * 0.12;
+    const p = pathPoint(g, uOf(r));
+    const off = r.laneN * spread;
     const x = p.x + p.nx * off;
     const y = p.y + p.ny * off;
     const sp = sprites[r.i];
@@ -283,7 +332,8 @@ function drawStandings(ctx: Ctx, g: Geo, racers: LaneRacer[], sprites: Sprites, 
   const { hole } = g;
   const N = Math.min(10, order.length);
   // compact report - small rows so the road can be as big as possible
-  const rowH = Math.min(hole.h / 16, g.size * 0.62);
+  // match the rolling marbles so the list reads at the same size
+  const rowH = Math.min(hole.h / 15, g.size * 1.35);
   const flag = rowH * 0.82;
   const numW = rowH * 0.78;
   const gap = rowH * 0.24;
@@ -373,13 +423,20 @@ export default function Race() {
   const startRace = useCallback(() => {
     const s = state.current;
     s.theme = THEMES[Math.floor(Math.random() * THEMES.length)];
+    // Shuffle slots so the field spreads evenly (and randomly) around the loop.
+    const slots = COUNTRIES.map((_, i) => i);
+    for (let i = slots.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [slots[i], slots[j]] = [slots[j], slots[i]];
+    }
     s.racers = COUNTRIES.map((_, i) => ({
       i,
-      dist: Math.random() * 150, // small stagger so the field starts spread out
+      dist: 0,
       speed: 0,
       form: 0.9 + Math.random() * 0.3,
       place: 0,
-      laneN: Math.random() * 2 - 1,
+      startU: slots[i] / COUNTRIES.length, // spread around the whole track
+      laneN: ((slots[i] % 5) - 2) / 2 + (Math.random() * 0.2 - 0.1),
     }));
     s.finished = 0;
     s.elapsed = 0;
@@ -417,7 +474,7 @@ export default function Race() {
       if (!st.ended) {
         st.elapsed += dt;
         for (const r of st.racers) {
-          const u = (((r.dist % TRACK_LEN) + TRACK_LEN) % TRACK_LEN) / TRACK_LEN;
+          const u = uOf(r);
           const slow = u >= OBS_START && u <= OBS_END ? 0.5 : 1;
           stepRacer(r, dt, st.elapsed, undefined, slow);
         }
@@ -438,8 +495,9 @@ export default function Race() {
       drawTrack(ctx, g);
       drawObstacle(ctx, g);
       drawFinish(ctx, g);
+      separate(st.racers, g);
       const order = standings(st.racers);
-      drawMarbles(ctx, g, st.racers, st.sprites, order, st.elapsed);
+      drawMarbles(ctx, g, st.racers, st.sprites, order);
       drawStandings(ctx, g, st.racers, st.sprites, order);
 
       st.raf = requestAnimationFrame(draw);
