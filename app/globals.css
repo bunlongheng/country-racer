@@ -44,9 +44,21 @@ body {
   animation: pop 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
+@keyframes spin3d {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.spin3d {
+  animation: spin3d 3.2s linear infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .pop {
     animation: none;
     opacity: 1;
+  }
+  .spin3d {
+    animation: none;
   }
 }

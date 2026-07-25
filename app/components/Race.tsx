@@ -452,6 +452,32 @@ function drawCountdown(ctx: Ctx, g: Geo, countdown: number, goFlash: number) {
   ctx.textBaseline = "alphabetic";
 }
 
+// A spinning glossy 3D marble for the podium: the flag rotates, a fixed
+// highlight + rim shading make it a sphere.
+function PodiumMarble({ code, name, px }: { code: string; name: string; px: number }) {
+  return (
+    <div
+      className="relative rounded-full"
+      style={{
+        width: px,
+        height: px,
+        boxShadow: "inset -6px -9px 20px rgba(0,0,0,0.55), 0 10px 26px rgba(0,0,0,0.55)",
+      }}
+    >
+      <div className="spin3d absolute inset-0 overflow-hidden rounded-full">
+        <Image src={`/flags/${code}.png`} alt={name} fill sizes={`${px}px`} className="object-cover" priority />
+      </div>
+      <span
+        className="pointer-events-none absolute inset-0 rounded-full"
+        style={{
+          background:
+            "radial-gradient(circle at 34% 30%, rgba(255,255,255,0.78), rgba(255,255,255,0.12) 24%, transparent 46%)",
+        }}
+      />
+    </div>
+  );
+}
+
 export default function Race() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [phase, setPhase] = useState<"loading" | "racing" | "done">("loading");
@@ -659,24 +685,17 @@ export default function Race() {
       {phase === "done" && podium.length === NEED && (
         <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-black/70 backdrop-blur-sm">
           <h1 className="pop mb-8 text-3xl font-bold sm:text-5xl">Podium</h1>
-          <div className="pop flex items-end gap-4 sm:gap-8">
+          <div className="pop flex items-end gap-5 sm:gap-10">
             {[1, 0, 2].map((k) => {
               const w = podium[k];
               const medal = ["🥇", "🥈", "🥉"][w.place - 1];
-              const size = w.place === 1 ? "h-28 w-40 sm:h-36 sm:w-52" : "h-20 w-32 sm:h-28 sm:w-44";
+              const px = w.place === 1 ? 138 : 100;
               const lift = w.place === 1 ? "mb-6" : "";
               return (
                 <div key={w.country.code} className={`flex flex-col items-center ${lift}`}>
                   <div className="mb-2 text-4xl sm:text-5xl">{medal}</div>
-                  <Image
-                    src={`/flags/${w.country.code}.png`}
-                    alt={w.country.name}
-                    width={208}
-                    height={139}
-                    className={`${size} rounded-xl object-cover shadow-lg ring-2 ring-white/20`}
-                    priority
-                  />
-                  <p className="mt-2 text-base font-bold sm:text-xl">{w.country.name}</p>
+                  <PodiumMarble code={w.country.code} name={w.country.name} px={px} />
+                  <p className="mt-3 text-base font-bold sm:text-xl">{w.country.name}</p>
                 </div>
               );
             })}
