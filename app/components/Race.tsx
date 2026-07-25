@@ -120,7 +120,7 @@ function buildGeo(W: number, H: number, dpr: number, theme: Theme): Geo {
   const inset = m * 0.016; // hug the screen edge
   const band = m * 0.33; // big road - most of the screen is racing surface
   const bandHalf = band / 2;
-  const size = band * 0.17; // small marbles so the field never overlaps
+  const size = band * 0.204; // small marbles so the field never overlaps
   const L = inset + bandHalf;
   const T = inset + bandHalf;
   const R = W - inset - bandHalf;
@@ -323,9 +323,6 @@ function drawFinish(ctx: Ctx, g: Geo) {
 
 function drawMarbles(ctx: Ctx, g: Geo, active: Racer[], sprites: Sprites) {
   const spread = g.bandHalf - g.size * 0.5;
-  // leader ring on the 3 furthest live racers
-  const live = active.filter((r) => !r.dead).sort((a, b) => b.dist - a.dist);
-  const leaders = new Set(live.slice(0, 3));
   for (const r of active) {
     const p = pathPoint(g, uOf(r));
     const off = r.laneN * spread;
@@ -357,30 +354,42 @@ function drawMarbles(ctx: Ctx, g: Geo, active: Racer[], sprites: Sprites) {
     }
     drawBall(ctx, sp, x, y, ms, r.dist * 0.13); // spin ∝ distance = rolling
     ctx.globalAlpha = 1;
-
-    if (leaders.has(r) && r.spawn <= 0) {
-      const idx = [...leaders].indexOf(r);
-      ctx.beginPath();
-      ctx.arc(x, y, ms / 2 + 2 * g.dpr, 0, Math.PI * 2);
-      ctx.lineWidth = 3 * g.dpr;
-      ctx.strokeStyle = ["#ffd24a", "#cfd6e0", "#e0a06a"][idx] ?? "#ffd24a";
-      ctx.stroke();
-    }
   }
 }
 
-// Tiny centre readout - remaining field + finishers. Small on purpose.
-function drawInfo(ctx: Ctx, g: Geo, remaining: number, finished: number) {
-  const s = Math.max(11 * g.dpr, g.hole.h * 0.03);
+// Live top-3 in the middle: rank (gold/silver/bronze) + flag, plus a tiny
+// "X left" line so you can see the field thin out.
+function drawTop3(ctx: Ctx, g: Geo, top: number[], sprites: Sprites, remaining: number) {
   const cx = g.hole.x + g.hole.w / 2;
   const cy = g.hole.y + g.hole.h / 2;
+  const rowH = Math.min(g.hole.h * 0.08, g.size * 1.4);
+  const flag = rowH * 0.92;
+  const numW = rowH * 0.7;
+  const gap = rowH * 0.24;
+  const rowW = numW + gap + flag;
+  const startY = cy - rowH * 1.6;
+  const medals = ["#ffd24a", "#cfd6e0", "#e0a06a"];
+
   ctx.textAlign = "center";
-  ctx.fillStyle = "rgba(255,255,255,0.55)";
-  ctx.font = `700 ${Math.round(s)}px ${FONT}`;
-  ctx.fillText(`${remaining} left`, cx, cy);
-  ctx.fillStyle = "rgba(255,210,74,0.8)";
-  ctx.font = `700 ${Math.round(s * 0.85)}px ${FONT}`;
-  ctx.fillText(`${finished}/${NEED} finished`, cx, cy + s * 1.3);
+  ctx.fillStyle = "rgba(255,255,255,0.8)";
+  ctx.font = `700 ${Math.round(rowH * 0.52)}px ${FONT}`;
+  ctx.fillText("TOP 3", cx, startY - rowH * 0.5);
+
+  for (let k = 0; k < top.length && k < 3; k++) {
+    const y = startY + k * rowH;
+    const x = cx - rowW / 2;
+    ctx.textAlign = "right";
+    ctx.fillStyle = medals[k];
+    ctx.font = `800 ${Math.round(rowH * 0.62)}px ${FONT}`;
+    ctx.fillText(`${k + 1}`, x + numW * 0.85, y + flag * 0.72);
+    const sp = sprites[top[k]];
+    drawBall(ctx, sp, x + numW + gap + flag / 2, y + flag / 2, flag, 0);
+  }
+
+  ctx.textAlign = "center";
+  ctx.fillStyle = "rgba(255,255,255,0.4)";
+  ctx.font = `600 ${Math.round(rowH * 0.42)}px ${FONT}`;
+  ctx.fillText(`${remaining} left`, cx, startY + 3 * rowH + rowH * 0.4);
 }
 
 function drawCountdown(ctx: Ctx, g: Geo, countdown: number, goFlash: number) {
@@ -585,8 +594,12 @@ export default function Race() {
       if (st.countdown > 0 || st.goFlash > 0) {
         drawCountdown(ctx, g, st.countdown, st.goFlash);
       } else {
-        const remaining = st.queue.length + st.active.filter((r) => !r.dead && r.place === 0).length;
-        drawInfo(ctx, g, remaining, st.finishers.length);
+        const racing = st.active.filter((r) => !r.dead && r.place === 0);
+        const top = [
+          ...st.finishers,
+          ...racing.sort((a, b) => b.dist - a.dist).map((r) => r.ci),
+        ].slice(0, 3);
+        drawTop3(ctx, g, top, st.sprites, st.queue.length + racing.length);
       }
 
       st.raf = requestAnimationFrame(draw);
