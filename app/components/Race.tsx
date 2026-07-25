@@ -30,14 +30,15 @@ type Winner = { country: Country; place: number };
 
 // Obstacle types + their effect. Fires are gone - nothing removes a marble.
 type ObType = "boost" | "mud" | "tar" | "banana" | "shrink" | "grow";
+type ObShape = "boost" | "plain" | "banana" | "up" | "down";
 type Obstacle = { u: number; laneN: number; type: ObType };
-const OB: Record<ObType, { color: string; icon: string; mul?: number; time?: number; scale?: number }> = {
-  boost: { color: "#2fbf4f", icon: "⚡", mul: 1.8, time: 1.2 }, // green mud - speed up
-  mud: { color: "#8a5a2b", icon: "🟤", mul: 0.55, time: 1.3 }, // brown mud - slow
-  tar: { color: "#20232a", icon: "🖤", mul: 0.4, time: 1.6 }, // black mud - slower
-  banana: { color: "#f4d03f", icon: "🍌", mul: 0.45, time: 1.1 }, // banana - slip
-  shrink: { color: "#37b6ff", icon: "🔽", scale: 0.78 }, // small -> faster
-  grow: { color: "#c061ff", icon: "🔼", scale: 1.28 }, // big -> slower
+const OB: Record<ObType, { color: string; shape: ObShape; mul?: number; time?: number; scale?: number }> = {
+  boost: { color: "#33c65a", shape: "boost", mul: 1.8, time: 1.2 }, // green mud - speed up
+  mud: { color: "#7a4a24", shape: "plain", mul: 0.55, time: 1.3 }, // brown mud - slow
+  tar: { color: "#171922", shape: "plain", mul: 0.4, time: 1.6 }, // black mud - slower
+  banana: { color: "#f6d743", shape: "banana", mul: 0.45, time: 1.1 }, // banana - slip
+  shrink: { color: "#2aa8ff", shape: "down", scale: 0.78 }, // small -> faster
+  grow: { color: "#b45cff", shape: "up", scale: 1.28 }, // big -> slower
 };
 const OB_TYPES: ObType[] = ["boost", "mud", "tar", "banana", "shrink", "grow"];
 
@@ -280,7 +281,92 @@ function drawTrack(ctx: Ctx, g: Geo) {
   ctx.restore();
 }
 
-function drawObstacles(ctx: Ctx, g: Geo, obstacles: Obstacle[]) {
+function obShape(ctx: Ctx, shape: ObShape, x: number, y: number, s: number) {
+  if (shape === "plain") return;
+  if (shape === "banana") {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(-0.5);
+    ctx.beginPath();
+    ctx.arc(0, -s * 0.15, s, Math.PI * 0.15, Math.PI * 0.9);
+    ctx.lineWidth = s * 0.55;
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "#8a5a10";
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
+  ctx.fillStyle = "rgba(255,255,255,0.96)";
+  if (shape === "up" || shape === "down") {
+    const d = shape === "up" ? -1 : 1;
+    ctx.beginPath();
+    ctx.moveTo(x, y + d * s * 0.7);
+    ctx.lineTo(x - s * 0.72, y - d * s * 0.5);
+    ctx.lineTo(x + s * 0.72, y - d * s * 0.5);
+    ctx.closePath();
+    ctx.fill();
+  } else if (shape === "boost") {
+    ctx.strokeStyle = "rgba(255,255,255,0.96)";
+    ctx.lineWidth = s * 0.28;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (const dy of [-s * 0.3, s * 0.28]) {
+      ctx.beginPath();
+      ctx.moveTo(x - s * 0.6, y + dy + s * 0.28);
+      ctx.lineTo(x, y + dy - s * 0.18);
+      ctx.lineTo(x + s * 0.6, y + dy + s * 0.28);
+      ctx.stroke();
+    }
+  }
+}
+
+// A glossy spinning power-orb with a bright white glow inside (Mario-Kart-item
+// vibe), the effect colour, and an orbiting highlight so it reads as spinning.
+function drawOrb(ctx: Ctx, g: Geo, x: number, y: number, rad: number, color: string, shape: ObShape, t: number) {
+  const seed = (x + y) * 0.01;
+  const R = rad * (0.93 + 0.07 * Math.sin(t * 5 + seed));
+  const glow = ctx.createRadialGradient(x, y, R * 0.3, x, y, R * 1.85);
+  glow.addColorStop(0, color + "99");
+  glow.addColorStop(1, color + "00");
+  ctx.fillStyle = glow;
+  ctx.beginPath();
+  ctx.arc(x, y, R * 1.85, 0, Math.PI * 2);
+  ctx.fill();
+
+  const body = ctx.createRadialGradient(x, y, 1, x, y, R);
+  body.addColorStop(0, "rgba(255,255,255,0.95)");
+  body.addColorStop(0.32, "rgba(255,255,255,0.55)");
+  body.addColorStop(0.62, color);
+  body.addColorStop(1, color);
+  ctx.fillStyle = body;
+  ctx.beginPath();
+  ctx.arc(x, y, R, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(x, y, R, 0, Math.PI * 2);
+  ctx.clip();
+  obShape(ctx, shape, x, y, R * 0.5);
+  // orbiting highlight = spinning
+  const a = t * 2 + seed;
+  const hx = x + Math.cos(a) * R * 0.34;
+  const hy = y + Math.sin(a) * R * 0.34;
+  const hl = ctx.createRadialGradient(hx, hy, 1, hx, hy, R * 0.7);
+  hl.addColorStop(0, "rgba(255,255,255,0.85)");
+  hl.addColorStop(0.5, "rgba(255,255,255,0)");
+  ctx.fillStyle = hl;
+  ctx.fillRect(x - R, y - R, R * 2, R * 2);
+  ctx.restore();
+
+  ctx.beginPath();
+  ctx.arc(x, y, R, 0, Math.PI * 2);
+  ctx.lineWidth = 1.5 * g.dpr;
+  ctx.strokeStyle = "rgba(255,255,255,0.35)";
+  ctx.stroke();
+}
+
+function drawObstacles(ctx: Ctx, g: Geo, obstacles: Obstacle[], t: number) {
   const spread = g.bandHalf - g.size * 0.5;
   const rad = g.size * 0.62;
   for (const ob of obstacles) {
@@ -288,17 +374,7 @@ function drawObstacles(ctx: Ctx, g: Geo, obstacles: Obstacle[]) {
     const p = pathPoint(g, ob.u);
     const x = p.x + p.nx * ob.laneN * spread;
     const y = p.y + p.ny * ob.laneN * spread;
-    ctx.beginPath();
-    ctx.arc(x, y, rad, 0, Math.PI * 2);
-    ctx.fillStyle = def.color;
-    ctx.globalAlpha = 0.85;
-    ctx.fill();
-    ctx.globalAlpha = 1;
-    ctx.font = `${Math.round(rad * 1.1)}px ${FONT}`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(def.icon, x, y + rad * 0.06);
-    ctx.textBaseline = "alphabetic";
+    drawOrb(ctx, g, x, y, rad, def.color, def.shape, t);
   }
 }
 
@@ -538,7 +614,7 @@ export default function Race() {
       separate(st.active, g);
       drawScenery(ctx, g);
       drawTrack(ctx, g);
-      drawObstacles(ctx, g, st.obstacles);
+      drawObstacles(ctx, g, st.obstacles, now / 1000);
       drawFinish(ctx, g);
       drawMarbles(ctx, g, st.active, st.sprites);
       if (st.countdown > 0 || st.goFlash > 0) {
