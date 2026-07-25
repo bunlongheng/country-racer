@@ -1,9 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import Image from "next/image";
+import dynamic from "next/dynamic";
 import { COUNTRIES, type Country } from "../data/countries";
 import { FINISH, TRACK_LEN, stepRacer } from "@/lib/race";
+
+// True 3D WebGL marble - loaded only when the podium appears.
+const PodiumMarble3D = dynamic(() => import("./PodiumMarble3D"), { ssr: false });
 
 const SPRITE = 96; // baked marble sprite resolution (px)
 const RACERS = 10; // fixed field - ten marbles, no more
@@ -452,32 +455,6 @@ function drawCountdown(ctx: Ctx, g: Geo, countdown: number, goFlash: number) {
   ctx.textBaseline = "alphabetic";
 }
 
-// A spinning glossy 3D marble for the podium: the flag rotates, a fixed
-// highlight + rim shading make it a sphere.
-function PodiumMarble({ code, name, px }: { code: string; name: string; px: number }) {
-  return (
-    <div
-      className="relative rounded-full"
-      style={{
-        width: px,
-        height: px,
-        boxShadow: "inset -6px -9px 20px rgba(0,0,0,0.55), 0 10px 26px rgba(0,0,0,0.55)",
-      }}
-    >
-      <div className="spin3d absolute inset-0 overflow-hidden rounded-full">
-        <Image src={`/flags/${code}.png`} alt={name} fill sizes={`${px}px`} className="object-cover" priority />
-      </div>
-      <span
-        className="pointer-events-none absolute inset-0 rounded-full"
-        style={{
-          background:
-            "radial-gradient(circle at 34% 30%, rgba(255,255,255,0.78), rgba(255,255,255,0.12) 24%, transparent 46%)",
-        }}
-      />
-    </div>
-  );
-}
-
 export default function Race() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [phase, setPhase] = useState<"loading" | "racing" | "done">("loading");
@@ -694,7 +671,9 @@ export default function Race() {
               return (
                 <div key={w.country.code} className={`flex flex-col items-center ${lift}`}>
                   <div className="mb-2 text-4xl sm:text-5xl">{medal}</div>
-                  <PodiumMarble code={w.country.code} name={w.country.name} px={px} />
+                  <div style={{ width: px, height: px }} className="drop-shadow-[0_10px_26px_rgba(0,0,0,0.55)]">
+                    <PodiumMarble3D code={w.country.code} hue={w.country.hue} />
+                  </div>
                   <p className="mt-3 text-base font-bold sm:text-xl">{w.country.name}</p>
                 </div>
               );
