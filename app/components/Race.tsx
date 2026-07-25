@@ -8,8 +8,8 @@ import { FINISH, TRACK_LEN, stepRacer } from "@/lib/race";
 const SPRITE = 96; // baked marble sprite resolution (px)
 const MAX_ACTIVE = 20; // most marbles allowed on the road at once
 const NEED = 3; // finishers needed to end the race (gold/silver/bronze)
-const FIRES = 5; // fire hazards on the track
-const POP_CHANCE = 0.075; // chance a racer pops each time it hits a fire
+const FIRES = 2; // just two fire rings on the track
+const POP_CHANCE = 0.14; // chance a racer pops each time it rolls through a fire
 const FONT = "system-ui, -apple-system, 'Segoe UI', sans-serif";
 
 type Racer = {
@@ -59,25 +59,42 @@ function bakeMarble(img: HTMLImageElement): HTMLCanvasElement {
   const w = img.width * s;
   const h = img.height * s;
   g.drawImage(img, (SPRITE - w) / 2, (SPRITE - h) / 2, w, h);
+  // radial rim shading only (symmetric, so it can rotate). The directional
+  // gloss highlight is drawn per-frame and stays put, so the flag reads as a
+  // rolling 3D marble under a fixed light.
   const rim = g.createRadialGradient(r, r, r * 0.35, r, r, r);
   rim.addColorStop(0, "rgba(0,0,0,0)");
-  rim.addColorStop(0.75, "rgba(0,0,0,0.05)");
-  rim.addColorStop(1, "rgba(0,0,0,0.55)");
+  rim.addColorStop(0.72, "rgba(0,0,0,0.06)");
+  rim.addColorStop(1, "rgba(0,0,0,0.6)");
   g.fillStyle = rim;
   g.fillRect(0, 0, SPRITE, SPRITE);
-  const hi = g.createRadialGradient(r * 0.62, r * 0.55, 1, r * 0.62, r * 0.55, r * 0.9);
-  hi.addColorStop(0, "rgba(255,255,255,0.85)");
-  hi.addColorStop(0.18, "rgba(255,255,255,0.35)");
-  hi.addColorStop(0.4, "rgba(255,255,255,0)");
-  g.fillStyle = hi;
-  g.fillRect(0, 0, SPRITE, SPRITE);
   g.restore();
-  g.beginPath();
-  g.arc(r, r, r - 2, 0, Math.PI * 2);
-  g.lineWidth = 2;
-  g.strokeStyle = "rgba(255,255,255,0.35)";
-  g.stroke();
   return c;
+}
+
+// Draw one rolling glossy marble: the flag sprite spins by `roll`, then a fixed
+// top-left highlight is laid over it so it looks like a 3D ball under light.
+function drawBall(ctx: Ctx, sp: HTMLCanvasElement, x: number, y: number, ms: number, roll: number) {
+  if (sp && sp.width) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(roll);
+    ctx.drawImage(sp, -ms / 2, -ms / 2, ms, ms);
+    ctx.restore();
+  }
+  const hx = x - ms * 0.17;
+  const hy = y - ms * 0.2;
+  const hg = ctx.createRadialGradient(hx, hy, 1, hx, hy, ms * 0.58);
+  hg.addColorStop(0, "rgba(255,255,255,0.72)");
+  hg.addColorStop(0.32, "rgba(255,255,255,0.14)");
+  hg.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(x, y, ms / 2, 0, Math.PI * 2);
+  ctx.clip();
+  ctx.fillStyle = hg;
+  ctx.fillRect(x - ms / 2, y - ms / 2, ms, ms);
+  ctx.restore();
 }
 
 // --- Track geometry: a rounded-rect loop hugging the screen edges -----------
@@ -260,36 +277,30 @@ function drawTrack(ctx: Ctx, g: Geo) {
   ctx.restore();
 }
 
-function drawFlame(ctx: Ctx, x: number, y: number, s: number, t: number, seed: number) {
-  const f = s * (0.82 + 0.18 * Math.sin(t * 12 + seed));
-  const gl = ctx.createRadialGradient(x, y, 1, x, y, f * 1.3);
-  gl.addColorStop(0, "rgba(255,180,60,0.75)");
-  gl.addColorStop(1, "rgba(255,80,0,0)");
-  ctx.fillStyle = gl;
-  ctx.beginPath();
-  ctx.arc(x, y, f * 1.3, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(x, y - f);
-  ctx.bezierCurveTo(x + f * 0.7, y - f * 0.2, x + f * 0.5, y + f * 0.5, x, y + f * 0.5);
-  ctx.bezierCurveTo(x - f * 0.5, y + f * 0.5, x - f * 0.7, y - f * 0.2, x, y - f);
-  ctx.fillStyle = "#ff6a1a";
-  ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(x, y - f * 0.58);
-  ctx.bezierCurveTo(x + f * 0.4, y - f * 0.1, x + f * 0.28, y + f * 0.34, x, y + f * 0.34);
-  ctx.bezierCurveTo(x - f * 0.28, y + f * 0.34, x - f * 0.4, y - f * 0.1, x, y - f * 0.58);
-  ctx.fillStyle = "#ffd23a";
-  ctx.fill();
-}
-
+// Two circular fire rings on the road - roll through one and you might pop.
 function drawFires(ctx: Ctx, g: Geo, fires: number[], t: number) {
-  const spread = g.bandHalf - g.size * 0.35;
   for (const uF of fires) {
     const p = pathPoint(g, uF);
-    for (const ln of [-0.62, 0, 0.62]) {
-      drawFlame(ctx, p.x + p.nx * ln * spread, p.y + p.ny * ln * spread, g.size * 0.85, t, uF * 53 + ln * 7);
-    }
+    const rad = g.bandHalf * 0.9;
+    const flick = 0.92 + 0.08 * Math.sin(t * 9 + uF * 40);
+    const gl = ctx.createRadialGradient(p.x, p.y, rad * 0.15, p.x, p.y, rad * flick);
+    gl.addColorStop(0, "rgba(255,190,70,0.55)");
+    gl.addColorStop(0.55, "rgba(255,90,20,0.4)");
+    gl.addColorStop(1, "rgba(255,60,0,0)");
+    ctx.fillStyle = gl;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, rad * flick, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, rad * 0.72 * flick, 0, Math.PI * 2);
+    ctx.lineWidth = 5 * g.dpr;
+    ctx.strokeStyle = "#ff7a1a";
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, rad * 0.55 * flick, 0, Math.PI * 2);
+    ctx.lineWidth = 3 * g.dpr;
+    ctx.strokeStyle = "#ffd23a";
+    ctx.stroke();
   }
 }
 
@@ -340,7 +351,7 @@ function drawMarbles(ctx: Ctx, g: Geo, active: Racer[], sprites: Sprites) {
       ctx.globalAlpha = 1 - r.spawn;
       ms = g.size * (1.2 - r.spawn * 0.2);
     }
-    if (sp && sp.width) ctx.drawImage(sp, x - ms / 2, y - ms / 2, ms, ms);
+    drawBall(ctx, sp, x, y, ms, r.dist * 0.13); // spin ∝ distance = rolling
     ctx.globalAlpha = 1;
 
     if (leaders.has(r) && r.spawn <= 0) {
