@@ -8,8 +8,10 @@ import { FINISH, TRACK_LEN, stepRacer } from "@/lib/race";
 const SPRITE = 96; // baked marble sprite resolution (px)
 const MAX_ACTIVE = 20; // most marbles allowed on the road at once
 const NEED = 3; // finishers needed to end the race (gold/silver/bronze)
-const FIRES = 2; // just two fire rings on the track
-const POP_CHANCE = 0.14; // chance a racer pops each time it rolls through a fire
+const FIRES = 2; // just two small fires on the track
+const POP_CHANCE = 0.4; // chance to pop only when a marble rolls right over a fire
+
+type Fire = { u: number; laneN: number };
 const FONT = "system-ui, -apple-system, 'Segoe UI', sans-serif";
 
 type Racer = {
@@ -277,30 +279,32 @@ function drawTrack(ctx: Ctx, g: Geo) {
   ctx.restore();
 }
 
-// Two circular fire rings on the road - roll through one and you might pop.
-function drawFires(ctx: Ctx, g: Geo, fires: number[], t: number) {
-  for (const uF of fires) {
-    const p = pathPoint(g, uF);
-    const rad = g.bandHalf * 0.9;
-    const flick = 0.92 + 0.08 * Math.sin(t * 9 + uF * 40);
-    const gl = ctx.createRadialGradient(p.x, p.y, rad * 0.15, p.x, p.y, rad * flick);
-    gl.addColorStop(0, "rgba(255,190,70,0.55)");
-    gl.addColorStop(0.55, "rgba(255,90,20,0.4)");
+// Two small marble-sized fires, each sitting in one lane. Roll right over one
+// and you might pop - most marbles pass safely beside it.
+function drawFires(ctx: Ctx, g: Geo, fires: Fire[], t: number) {
+  const spread = g.bandHalf - g.size * 0.5;
+  const rad = g.size * 0.5;
+  for (const fire of fires) {
+    const p = pathPoint(g, fire.u);
+    const x = p.x + p.nx * fire.laneN * spread;
+    const y = p.y + p.ny * fire.laneN * spread;
+    const flick = 0.9 + 0.1 * Math.sin(t * 10 + fire.u * 40);
+    const gl = ctx.createRadialGradient(x, y, rad * 0.1, x, y, rad * 1.7 * flick);
+    gl.addColorStop(0, "rgba(255,200,80,0.85)");
+    gl.addColorStop(0.5, "rgba(255,100,20,0.5)");
     gl.addColorStop(1, "rgba(255,60,0,0)");
     ctx.fillStyle = gl;
     ctx.beginPath();
-    ctx.arc(p.x, p.y, rad * flick, 0, Math.PI * 2);
+    ctx.arc(x, y, rad * 1.7 * flick, 0, Math.PI * 2);
     ctx.fill();
     ctx.beginPath();
-    ctx.arc(p.x, p.y, rad * 0.72 * flick, 0, Math.PI * 2);
-    ctx.lineWidth = 5 * g.dpr;
-    ctx.strokeStyle = "#ff7a1a";
-    ctx.stroke();
+    ctx.arc(x, y, rad * flick, 0, Math.PI * 2);
+    ctx.fillStyle = "#ff7a1a";
+    ctx.fill();
     ctx.beginPath();
-    ctx.arc(p.x, p.y, rad * 0.55 * flick, 0, Math.PI * 2);
-    ctx.lineWidth = 3 * g.dpr;
-    ctx.strokeStyle = "#ffd23a";
-    ctx.stroke();
+    ctx.arc(x, y, rad * 0.55 * flick, 0, Math.PI * 2);
+    ctx.fillStyle = "#ffe066";
+    ctx.fill();
   }
 }
 
@@ -413,7 +417,7 @@ export default function Race() {
     queue: number[];
     active: Racer[];
     finishers: number[];
-    fires: number[];
+    fires: Fire[];
     countdown: number;
     goFlash: number;
     elapsed: number;
@@ -483,7 +487,10 @@ export default function Race() {
       }
     }
     s.finishers = [];
-    s.fires = Array.from({ length: FIRES }, (_, k) => (k + 0.5) / FIRES + (Math.random() - 0.5) * 0.04);
+    s.fires = Array.from({ length: FIRES }, (_, k) => ({
+      u: (k + 0.5) / FIRES + (Math.random() - 0.5) * 0.12,
+      laneN: (Math.random() * 2 - 1) * 0.7,
+    }));
     s.countdown = 3;
     s.goFlash = 0;
     s.elapsed = 0;
@@ -524,14 +531,16 @@ export default function Race() {
         } else {
           st.goFlash = Math.max(0, st.goFlash - dt);
           st.elapsed += dt;
+          const spread = g.bandHalf - g.size * 0.5;
           for (const r of st.active) {
             if (r.dead || r.place > 0) continue;
             const u0 = uOf(r);
             stepRacer(r, dt, st.elapsed);
             const u1 = uOf(r);
-            // fire pops
-            for (const uF of st.fires) {
-              if (crossed(u0, u1, uF) && Math.random() < POP_CHANCE) {
+            // fire pops - only if the marble rolls right over the small fire
+            for (const fire of st.fires) {
+              const near = Math.abs(r.laneN - fire.laneN) * spread < g.size * 0.85;
+              if (near && crossed(u0, u1, fire.u) && Math.random() < POP_CHANCE) {
                 r.dead = true;
                 r.pop = 1;
                 break;
