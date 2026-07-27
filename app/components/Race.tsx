@@ -288,26 +288,24 @@ function drawTrack(ctx: Ctx, g: Geo) {
   ctx.restore();
 }
 
-// Distinct white icon per spell so each is easy to tell apart at a glance.
-function obShape(ctx: Ctx, shape: ObShape, x: number, y: number, s: number) {
-  const white = "rgba(255,255,255,0.97)";
+// A single small, dim, colourless sign per spell - no colour, no glow, no orb -
+// so it never competes with the country marble colours.
+function obShape(ctx: Ctx, shape: ObShape, x: number, y: number, s: number, col: string) {
+  ctx.fillStyle = col;
+  ctx.strokeStyle = col;
   if (shape === "banana") {
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(-0.5);
     ctx.beginPath();
-    ctx.arc(0, -s * 0.1, s * 0.95, Math.PI * 0.14, Math.PI * 0.9);
-    ctx.lineWidth = s * 0.5;
+    ctx.arc(0, -s * 0.1, s * 0.9, Math.PI * 0.16, Math.PI * 0.88);
+    ctx.lineWidth = s * 0.42;
     ctx.lineCap = "round";
-    ctx.strokeStyle = "#b3801a";
     ctx.stroke();
     ctx.restore();
     return;
   }
   if (shape === "bolt") {
-    ctx.fillStyle = "#fff27a";
-    ctx.strokeStyle = "rgba(0,0,0,0.25)";
-    ctx.lineWidth = s * 0.06;
     ctx.beginPath();
     ctx.moveTo(x + s * 0.28, y - s * 0.78);
     ctx.lineTo(x - s * 0.42, y + s * 0.12);
@@ -317,11 +315,9 @@ function obShape(ctx: Ctx, shape: ObShape, x: number, y: number, s: number) {
     ctx.lineTo(x + s * 0.08, y - s * 0.12);
     ctx.closePath();
     ctx.fill();
-    ctx.stroke();
     return;
   }
   if (shape === "droplet") {
-    ctx.fillStyle = white;
     ctx.beginPath();
     ctx.moveTo(x, y - s * 0.8);
     ctx.bezierCurveTo(x + s * 0.78, y + s * 0.05, x + s * 0.5, y + s * 0.8, x, y + s * 0.8);
@@ -331,26 +327,26 @@ function obShape(ctx: Ctx, shape: ObShape, x: number, y: number, s: number) {
     return;
   }
   if (shape === "skull") {
-    ctx.fillStyle = white;
     ctx.beginPath();
-    ctx.arc(x, y - s * 0.12, s * 0.62, Math.PI, 0);
-    ctx.lineTo(x + s * 0.45, y + s * 0.28);
-    ctx.lineTo(x + s * 0.22, y + s * 0.28);
-    ctx.lineTo(x + s * 0.22, y + s * 0.5);
-    ctx.lineTo(x - s * 0.22, y + s * 0.5);
-    ctx.lineTo(x - s * 0.22, y + s * 0.28);
-    ctx.lineTo(x - s * 0.45, y + s * 0.28);
+    ctx.arc(x, y - s * 0.12, s * 0.6, Math.PI, 0);
+    ctx.lineTo(x + s * 0.42, y + s * 0.28);
+    ctx.lineTo(x + s * 0.2, y + s * 0.28);
+    ctx.lineTo(x + s * 0.2, y + s * 0.48);
+    ctx.lineTo(x - s * 0.2, y + s * 0.48);
+    ctx.lineTo(x - s * 0.2, y + s * 0.28);
+    ctx.lineTo(x - s * 0.42, y + s * 0.28);
     ctx.closePath();
     ctx.fill();
-    ctx.fillStyle = "rgba(0,0,0,0.8)";
+    ctx.save();
+    ctx.globalCompositeOperation = "destination-out";
     ctx.beginPath();
-    ctx.arc(x - s * 0.24, y - s * 0.08, s * 0.16, 0, Math.PI * 2);
-    ctx.arc(x + s * 0.24, y - s * 0.08, s * 0.16, 0, Math.PI * 2);
+    ctx.arc(x - s * 0.22, y - s * 0.08, s * 0.15, 0, Math.PI * 2);
+    ctx.arc(x + s * 0.22, y - s * 0.08, s * 0.15, 0, Math.PI * 2);
     ctx.fill();
+    ctx.restore();
     return;
   }
-  // grow = "+" (get bigger), shrink = "-" (get smaller). Unmistakable.
-  ctx.strokeStyle = white;
+  // grow = "+" (bigger), shrink = "-" (smaller).
   ctx.lineWidth = s * 0.3;
   ctx.lineCap = "round";
   ctx.beginPath();
@@ -365,61 +361,15 @@ function obShape(ctx: Ctx, shape: ObShape, x: number, y: number, s: number) {
   }
 }
 
-// A glossy spinning power-orb with a bright white glow inside (Mario-Kart-item
-// vibe), the effect colour, and an orbiting highlight so it reads as spinning.
-function drawOrb(ctx: Ctx, g: Geo, x: number, y: number, rad: number, color: string, shape: ObShape, t: number) {
-  const seed = (x + y) * 0.01;
-  const R = rad * (0.93 + 0.07 * Math.sin(t * 5 + seed));
-  const glow = ctx.createRadialGradient(x, y, R * 0.3, x, y, R * 1.85);
-  glow.addColorStop(0, color + "99");
-  glow.addColorStop(1, color + "00");
-  ctx.fillStyle = glow;
-  ctx.beginPath();
-  ctx.arc(x, y, R * 1.85, 0, Math.PI * 2);
-  ctx.fill();
-
-  const body = ctx.createRadialGradient(x, y, 1, x, y, R);
-  body.addColorStop(0, "rgba(255,255,255,0.95)");
-  body.addColorStop(0.32, "rgba(255,255,255,0.55)");
-  body.addColorStop(0.62, color);
-  body.addColorStop(1, color);
-  ctx.fillStyle = body;
-  ctx.beginPath();
-  ctx.arc(x, y, R, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(x, y, R, 0, Math.PI * 2);
-  ctx.clip();
-  obShape(ctx, shape, x, y, R * 0.5);
-  // orbiting highlight = spinning
-  const a = t * 2 + seed;
-  const hx = x + Math.cos(a) * R * 0.34;
-  const hy = y + Math.sin(a) * R * 0.34;
-  const hl = ctx.createRadialGradient(hx, hy, 1, hx, hy, R * 0.7);
-  hl.addColorStop(0, "rgba(255,255,255,0.85)");
-  hl.addColorStop(0.5, "rgba(255,255,255,0)");
-  ctx.fillStyle = hl;
-  ctx.fillRect(x - R, y - R, R * 2, R * 2);
-  ctx.restore();
-
-  ctx.beginPath();
-  ctx.arc(x, y, R, 0, Math.PI * 2);
-  ctx.lineWidth = 1.5 * g.dpr;
-  ctx.strokeStyle = "rgba(255,255,255,0.35)";
-  ctx.stroke();
-}
-
-function drawObstacles(ctx: Ctx, g: Geo, obstacles: Obstacle[], t: number) {
+function drawObstacles(ctx: Ctx, g: Geo, obstacles: Obstacle[]) {
   const spread = g.bandHalf - g.size * 0.5;
-  const rad = g.size * 0.62;
+  const rad = g.size * 0.34; // small
+  const col = "rgba(205,205,205,0.42)"; // dim, colourless
   for (const ob of obstacles) {
-    const def = OB[ob.type];
     const p = pathPoint(g, ob.u);
     const x = p.x + p.nx * ob.laneN * spread;
     const y = p.y + p.ny * ob.laneN * spread;
-    drawOrb(ctx, g, x, y, rad, def.color, def.shape, t);
+    obShape(ctx, OB[ob.type].shape, x, y, rad, col);
   }
 }
 
@@ -670,7 +620,7 @@ export default function Race() {
       separate(st.active, g);
       drawScenery(ctx, g);
       drawTrack(ctx, g);
-      drawObstacles(ctx, g, st.obstacles, now / 1000);
+      drawObstacles(ctx, g, st.obstacles);
       drawFinish(ctx, g);
 
       // Feed marble positions to the 3D overlay (CSS pixels + travel direction).
