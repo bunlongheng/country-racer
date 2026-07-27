@@ -4,9 +4,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { COUNTRIES, type Country } from "../data/countries";
 import { FINISH, TRACK_LEN, stepRacer } from "@/lib/race";
+import { sound } from "@/lib/sound";
+import SoundToggle from "./SoundToggle";
+import type { MarbleRender } from "./RaceMarbles";
 
-// True 3D WebGL marble - loaded only when the podium appears.
+// True 3D WebGL marbles - client only.
 const PodiumMarble3D = dynamic(() => import("./PodiumMarble3D"), { ssr: false });
+const RaceMarbles = dynamic(() => import("./RaceMarbles"), { ssr: false });
 
 const SPRITE = 96; // baked marble sprite resolution (px)
 const RACERS = 10; // fixed field - ten marbles, no more
@@ -345,15 +349,20 @@ function obShape(ctx: Ctx, shape: ObShape, x: number, y: number, s: number) {
     ctx.fill();
     return;
   }
-  // grow = big solid up-triangle, shrink = solid down-triangle. Very distinct.
-  ctx.fillStyle = white;
-  const d = shape === "up" ? -1 : 1;
+  // grow = "+" (get bigger), shrink = "-" (get smaller). Unmistakable.
+  ctx.strokeStyle = white;
+  ctx.lineWidth = s * 0.3;
+  ctx.lineCap = "round";
   ctx.beginPath();
-  ctx.moveTo(x, y + d * s * 0.72);
-  ctx.lineTo(x - s * 0.72, y - d * s * 0.5);
-  ctx.lineTo(x + s * 0.72, y - d * s * 0.5);
-  ctx.closePath();
-  ctx.fill();
+  ctx.moveTo(x - s * 0.62, y);
+  ctx.lineTo(x + s * 0.62, y);
+  ctx.stroke();
+  if (shape === "up") {
+    ctx.beginPath();
+    ctx.moveTo(x, y - s * 0.62);
+    ctx.lineTo(x, y + s * 0.62);
+    ctx.stroke();
+  }
 }
 
 // A glossy spinning power-orb with a bright white glow inside (Mario-Kart-item
@@ -427,17 +436,6 @@ function drawFinish(ctx: Ctx, g: Geo) {
   ctx.restore();
 }
 
-function drawMarbles(ctx: Ctx, g: Geo, active: Racer[], sprites: Sprites) {
-  const spread = g.bandHalf - g.size * 0.5;
-  for (const r of active) {
-    const p = pathPoint(g, uOf(r));
-    const off = r.laneN * spread;
-    const x = p.x + p.nx * off;
-    const y = p.y + p.ny * off;
-    drawBall(ctx, sprites[r.ci], x, y, g.size * r.scale, r.dist * 0.13);
-  }
-}
-
 // Live top-3 in the middle: rank (gold/silver/bronze) + flag. Nothing else.
 function drawTop3(ctx: Ctx, g: Geo, top: number[], sprites: Sprites) {
   const cx = g.hole.x + g.hole.w / 2;
@@ -493,6 +491,8 @@ export default function Race() {
   const [phase, setPhase] = useState<"loading" | "racing" | "done">("loading");
   const [podium, setPodium] = useState<Winner[]>([]);
   const [announce, setAnnounce] = useState("");
+  const [codes, setCodes] = useState<{ code: string; hue: number }[]>([]);
+  const renderRef = useRef<MarbleRender[]>([]);
   const state = useRef<{
     sprites: HTMLCanvasElement[];
     theme: Theme;
@@ -501,11 +501,12 @@ export default function Race() {
     obstacles: Obstacle[];
     countdown: number;
     goFlash: number;
+    lastCount: number;
     elapsed: number;
     raf: number;
     last: number;
     ended: boolean;
-  }>({ sprites: [], theme: THEMES[0], active: [], finishers: [], obstacles: [], countdown: 3, goFlash: 0, elapsed: 0, raf: 0, last: 0, ended: false });
+  }>({ sprites: [], theme: THEMES[0], active: [], finishers: [], obstacles: [], countdown: 3, goFlash: 0, lastCount: 4, elapsed: 0, raf: 0, last: 0, ended: false });
 
   useEffect(() => {
     let alive = true;
@@ -539,6 +540,8 @@ export default function Race() {
       [pool[i], pool[j]] = [pool[j], pool[i]];
     }
     const chosen = pool.slice(0, RACERS);
+    setCodes(chosen.map((ci) => ({ code: COUNTRIES[ci].code, hue: COUNTRIES[ci].hue })));
+    renderRef.current = chosen.map(() => ({ x: 0, y: 0, r: 0, dx: 1, dy: 0, dist: 0 }));
     s.active = chosen.map((ci, k) => {
       const lane = k % 5;
       const row = Math.floor(k / 5);
@@ -567,9 +570,11 @@ export default function Race() {
     }));
     s.countdown = 3;
     s.goFlash = 0;
+    s.lastCount = 4;
     s.elapsed = 0;
     s.ended = false;
     s.last = 0;
+    sound.bugle(); // "call to post"
     setPodium([]);
     setPhase("racing");
   }, []);
@@ -601,7 +606,15 @@ export default function Race() {
       if (!st.ended) {
         if (st.countdown > 0) {
           st.countdown -= dt;
-          if (st.countdown <= 0) st.goFlash = 0.8;
+          const ci = Math.ceil(st.countdown);
+          if (ci < st.lastCount && ci >= 1) {
+            st.lastCount = ci;
+            sound.beep(); // 3 ... 2 ... 1
+          }
+          if (st.countdown <= 0) {
+            st.goFlash = 0.8;
+            sound.go(); // GO!
+          }
         } else {
           st.goFlash = Math.max(0, st.goFlash - dt);
           st.elapsed += dt;
@@ -623,8 +636,14 @@ export default function Race() {
                   if (def.mul) {
                     r.effMul = def.mul;
                     r.effTime = def.time ?? 1;
+                    if (ob.type === "boost") sound.boost();
+                    else if (ob.type === "banana") sound.slip();
+                    else sound.splat();
                   }
-                  if (def.scale) r.scale = Math.max(0.62, Math.min(1.5, r.scale * def.scale));
+                  if (def.scale) {
+                    r.scale = Math.max(0.62, Math.min(1.5, r.scale * def.scale));
+                    sound.size();
+                  }
                   r.obCool = 0.35;
                   break;
                 }
@@ -642,6 +661,7 @@ export default function Race() {
             setAnnounce(
               `Race finished. Gold ${top[0].country.name}, silver ${top[1].country.name}, bronze ${top[2].country.name}.`,
             );
+            sound.win();
             setPhase("done");
           }
         }
@@ -652,7 +672,25 @@ export default function Race() {
       drawTrack(ctx, g);
       drawObstacles(ctx, g, st.obstacles, now / 1000);
       drawFinish(ctx, g);
-      drawMarbles(ctx, g, st.active, st.sprites);
+
+      // Feed marble positions to the 3D overlay (CSS pixels + travel direction).
+      const spr = g.bandHalf - g.size * 0.5;
+      for (let i = 0; i < st.active.length; i++) {
+        const r = st.active[i];
+        const u = uOf(r);
+        const p = pathPoint(g, u);
+        const p2 = pathPoint(g, (u + 0.003) % 1);
+        const x = p.x + p.nx * r.laneN * spr;
+        const y = p.y + p.ny * r.laneN * spr;
+        renderRef.current[i] = {
+          x: x / dpr,
+          y: y / dpr,
+          r: (g.size * r.scale * 0.5) / dpr,
+          dx: p2.x - p.x,
+          dy: p2.y - p.y,
+          dist: r.dist,
+        };
+      }
       if (st.countdown > 0 || st.goFlash > 0) {
         drawCountdown(ctx, g, st.countdown, st.goFlash);
       } else {
@@ -674,6 +712,17 @@ export default function Race() {
     };
   }, [phase, startRace]);
 
+  // Browsers block audio until the first interaction - unlock on any tap/key.
+  useEffect(() => {
+    const unlock = () => sound.unlock();
+    window.addEventListener("pointerdown", unlock);
+    window.addEventListener("keydown", unlock);
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    };
+  }, []);
+
   return (
     <main className="relative h-[100dvh] w-full overflow-hidden bg-black">
       <canvas
@@ -682,9 +731,17 @@ export default function Race() {
         aria-label="Live race of ten country flag marbles around a track with obstacles"
         className="block h-full w-full"
       />
+      {codes.length > 0 && (
+        <div className="pointer-events-none absolute inset-0">
+          <RaceMarbles codes={codes} data={renderRef} />
+        </div>
+      )}
+
       <p className="sr-only" aria-live="polite" role="status">
         {announce}
       </p>
+
+      <SoundToggle />
 
       {phase === "loading" && (
         <div className="absolute inset-0 flex items-center justify-center text-white/70">
