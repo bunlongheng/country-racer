@@ -15,7 +15,7 @@ const RaceMarbles = dynamic(() => import("./RaceMarbles"), { ssr: false });
 const SPRITE = 96; // baked marble sprite resolution (px)
 const RACERS = 10; // fixed field - ten marbles, no more
 const NEED = 3; // finishers needed to end the race
-const OBSTACLES = 10; // obstacles scattered on the track
+const OBSTACLES = 16; // obstacles scattered on the track
 const FONT = "system-ui, -apple-system, 'Segoe UI', sans-serif";
 
 type Racer = {
@@ -32,20 +32,23 @@ type Racer = {
   effMul: number; // active speed multiplier from an obstacle
   effTime: number; // seconds remaining on that multiplier
   obCool: number; // debounce so one obstacle fires once per pass
+  flash: number; // hit-flash timer (edge glows red/green)
+  flashGood: boolean; // green (good) or red (bad) flash
 };
 type Winner = { country: Country; place: number };
 
 // Obstacle types + their effect. Fires are gone - nothing removes a marble.
+// `good` = green flash (helps you); otherwise a red flash (hurts you).
 type ObType = "boost" | "mud" | "tar" | "banana" | "shrink" | "grow";
 type ObShape = "bolt" | "droplet" | "skull" | "banana" | "up" | "down";
-type Obstacle = { u: number; laneN: number; type: ObType };
-const OB: Record<ObType, { color: string; shape: ObShape; mul?: number; time?: number; scale?: number }> = {
-  boost: { color: "#33c65a", shape: "bolt", mul: 1.8, time: 1.2 }, // green mud - speed up
-  mud: { color: "#7a4a24", shape: "droplet", mul: 0.55, time: 1.3 }, // brown mud - slow
-  tar: { color: "#171922", shape: "skull", mul: 0.4, time: 1.6 }, // black tar - slowest
-  banana: { color: "#f6d743", shape: "banana", mul: 0.45, time: 1.1 }, // banana - slip
-  shrink: { color: "#2aa8ff", shape: "down", scale: 0.78 }, // small -> faster
-  grow: { color: "#b45cff", shape: "up", scale: 1.28 }, // big -> slower
+type Obstacle = { u: number; laneN: number; type: ObType; lit: number };
+const OB: Record<ObType, { shape: ObShape; good: boolean; mul?: number; time?: number; scale?: number }> = {
+  boost: { shape: "bolt", good: true, mul: 1.8, time: 1.2 }, // speed up
+  mud: { shape: "droplet", good: false, mul: 0.55, time: 1.3 }, // slow
+  tar: { shape: "skull", good: false, mul: 0.4, time: 1.6 }, // slowest
+  banana: { shape: "banana", good: false, mul: 0.45, time: 1.1 }, // slip
+  shrink: { shape: "down", good: true, scale: 0.78 }, // small -> faster
+  grow: { shape: "up", good: false, scale: 1.28 }, // big -> slower
 };
 const OB_TYPES: ObType[] = ["boost", "mud", "tar", "banana", "shrink", "grow"];
 
@@ -89,29 +92,6 @@ function bakeMarble(img: HTMLImageElement): HTMLCanvasElement {
   return c;
 }
 
-function drawBall(ctx: Ctx, sp: HTMLCanvasElement, x: number, y: number, ms: number, roll: number) {
-  if (sp && sp.width) {
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.rotate(roll);
-    ctx.drawImage(sp, -ms / 2, -ms / 2, ms, ms);
-    ctx.restore();
-  }
-  const hx = x - ms * 0.17;
-  const hy = y - ms * 0.2;
-  const hg = ctx.createRadialGradient(hx, hy, 1, hx, hy, ms * 0.58);
-  hg.addColorStop(0, "rgba(255,255,255,0.72)");
-  hg.addColorStop(0.32, "rgba(255,255,255,0.14)");
-  hg.addColorStop(1, "rgba(255,255,255,0)");
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(x, y, ms / 2, 0, Math.PI * 2);
-  ctx.clip();
-  ctx.fillStyle = hg;
-  ctx.fillRect(x - ms / 2, y - ms / 2, ms, ms);
-  ctx.restore();
-}
-
 // --- Track geometry ---------------------------------------------------------
 
 type Seg = { len: number; at: (t: number) => { x: number; y: number; nx: number; ny: number } };
@@ -131,9 +111,9 @@ type Geo = {
 function buildGeo(W: number, H: number, dpr: number, theme: Theme): Geo {
   const m = Math.min(W, H);
   const inset = m * 0.016;
-  const band = m * 0.33;
+  const band = m * 0.4; // big road
   const bandHalf = band / 2;
-  const size = band * 0.24; // ten marbles -> a bit bigger and clear
+  const size = band * 0.2; // ten marbles -> clear
   const L = inset + bandHalf;
   const T = inset + bandHalf;
   const R = W - inset - bandHalf;
@@ -224,40 +204,15 @@ function separate(active: Racer[], g: Geo) {
 }
 
 type Ctx = CanvasRenderingContext2D;
-type Sprites = HTMLCanvasElement[];
 
-function h1(i: number, salt: number) {
-  const x = Math.sin(i * 12.9898 + salt * 78.233) * 43758.5453;
-  return x - Math.floor(x);
-}
+// Neutral, all-gray look so the colourful country marbles are the only pop.
+const BG = "#15171c";
+const INFIELD = "#474b54";
+const ROAD = "#474b54";
 
 function drawScenery(ctx: Ctx, g: Geo) {
-  ctx.fillStyle = g.theme.bg;
+  ctx.fillStyle = BG;
   ctx.fillRect(0, 0, g.W, g.H);
-  const t = g.theme;
-  if (t.decor === "stars" || t.decor === "dots") {
-    for (let i = 0; i < 70; i++) {
-      ctx.beginPath();
-      ctx.arc(h1(i, 1) * g.W, h1(i, 2) * g.H, (0.6 + h1(i, 3) * 1.6) * g.dpr, 0, Math.PI * 2);
-      ctx.fillStyle = t.decorColor;
-      ctx.fill();
-    }
-  } else if (t.decor === "trees") {
-    for (let i = 0; i < 22; i++) {
-      const x = h1(i, 1) * g.W;
-      const y = h1(i, 2) * g.H;
-      const s = (8 + h1(i, 3) * 10) * g.dpr;
-      ctx.fillStyle = "#6b4a2b";
-      ctx.fillRect(x - s * 0.12, y, s * 0.24, s * 0.7);
-      ctx.beginPath();
-      ctx.moveTo(x, y - s);
-      ctx.lineTo(x - s * 0.6, y + s * 0.1);
-      ctx.lineTo(x + s * 0.6, y + s * 0.1);
-      ctx.closePath();
-      ctx.fillStyle = t.decorColor;
-      ctx.fill();
-    }
-  }
 }
 
 function trackPath(ctx: Ctx, g: Geo) {
@@ -269,20 +224,28 @@ function drawTrack(ctx: Ctx, g: Geo) {
   ctx.save();
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
+  // infield fill: the whole track area including the centre, so there is no
+  // black dead space in the middle - it reads as a gray racetrack infield.
+  ctx.beginPath();
+  ctx.roundRect(
+    g.cl.L - g.bandHalf,
+    g.cl.T - g.bandHalf,
+    g.cl.R - g.cl.L + g.bandHalf * 2,
+    g.cl.B - g.cl.T + g.bandHalf * 2,
+    g.cl.r + g.bandHalf,
+  );
+  ctx.fillStyle = INFIELD;
+  ctx.fill();
+  // the gray road band
   trackPath(ctx, g);
   ctx.lineWidth = g.bandHalf * 2;
-  ctx.strokeStyle = g.theme.track;
+  ctx.strokeStyle = ROAD;
   ctx.stroke();
-  trackPath(ctx, g);
-  ctx.lineWidth = g.bandHalf * 2 + 2 * g.dpr;
-  ctx.strokeStyle = g.theme.edge;
-  ctx.globalCompositeOperation = "destination-over";
-  ctx.stroke();
-  ctx.globalCompositeOperation = "source-over";
+  // subtle dashed racing line
   trackPath(ctx, g);
   ctx.lineWidth = 2 * g.dpr;
-  ctx.setLineDash(g.theme.dashed ? [10 * g.dpr, 12 * g.dpr] : []);
-  ctx.strokeStyle = g.theme.line;
+  ctx.setLineDash([10 * g.dpr, 12 * g.dpr]);
+  ctx.strokeStyle = "rgba(255,255,255,0.22)";
   ctx.stroke();
   ctx.setLineDash([]);
   ctx.restore();
@@ -364,12 +327,31 @@ function obShape(ctx: Ctx, shape: ObShape, x: number, y: number, s: number, col:
 function drawObstacles(ctx: Ctx, g: Geo, obstacles: Obstacle[]) {
   const spread = g.bandHalf - g.size * 0.5;
   const rad = g.size * 0.34; // small
-  const col = "rgba(205,205,205,0.42)"; // dim, colourless
   for (const ob of obstacles) {
+    const def = OB[ob.type];
     const p = pathPoint(g, ob.u);
     const x = p.x + p.nx * ob.laneN * spread;
     const y = p.y + p.ny * ob.laneN * spread;
-    obShape(ctx, OB[ob.type].shape, x, y, rad, col);
+    // When a marble just rolled over it, the obstacle lights up (green if good,
+    // red if bad) for ~1s. Otherwise it is a dim colourless sign.
+    if (ob.lit > 0) {
+      const c = def.good ? "80,220,120" : "235,80,70";
+      const glow = ctx.createRadialGradient(x, y, rad * 0.2, x, y, rad * 2.3);
+      glow.addColorStop(0, `rgba(${c},${0.5 * ob.lit})`);
+      glow.addColorStop(1, `rgba(${c},0)`);
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(x, y, rad * 2.3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(x, y, rad * 1.35, 0, Math.PI * 2);
+      ctx.lineWidth = 2.5 * g.dpr;
+      ctx.strokeStyle = `rgba(${c},${ob.lit})`;
+      ctx.stroke();
+      obShape(ctx, def.shape, x, y, rad, `rgba(255,255,255,${0.5 + 0.5 * ob.lit})`);
+    } else {
+      obShape(ctx, def.shape, x, y, rad, "rgba(205,205,205,0.42)");
+    }
   }
 }
 
@@ -384,34 +366,6 @@ function drawFinish(ctx: Ctx, g: Geo) {
   ctx.lineTo(p.x + p.nx * g.bandHalf, p.y + p.ny * g.bandHalf);
   ctx.stroke();
   ctx.restore();
-}
-
-// Live top-3 in the middle: rank (gold/silver/bronze) + flag. Nothing else.
-function drawTop3(ctx: Ctx, g: Geo, top: number[], sprites: Sprites) {
-  const cx = g.hole.x + g.hole.w / 2;
-  const cy = g.hole.y + g.hole.h / 2;
-  const rowH = Math.min(g.hole.h * 0.09, g.size * 1.5);
-  const flag = rowH * 0.92;
-  const numW = rowH * 0.7;
-  const gap = rowH * 0.24;
-  const rowW = numW + gap + flag;
-  const startY = cy - rowH * 1.3;
-  const medals = ["#ffd24a", "#cfd6e0", "#e0a06a"];
-
-  ctx.textAlign = "center";
-  ctx.fillStyle = "rgba(255,255,255,0.8)";
-  ctx.font = `700 ${Math.round(rowH * 0.5)}px ${FONT}`;
-  ctx.fillText("TOP 3", cx, startY - rowH * 0.55);
-
-  for (let k = 0; k < top.length && k < 3; k++) {
-    const y = startY + k * rowH;
-    const x = cx - rowW / 2;
-    ctx.textAlign = "right";
-    ctx.fillStyle = medals[k];
-    ctx.font = `800 ${Math.round(rowH * 0.62)}px ${FONT}`;
-    ctx.fillText(`${k + 1}`, x + numW * 0.85, y + flag * 0.72);
-    drawBall(ctx, sprites[top[k]], x + numW + gap + flag / 2, y + flag / 2, flag, 0);
-  }
 }
 
 function drawCountdown(ctx: Ctx, g: Geo, countdown: number, goFlash: number) {
@@ -491,7 +445,7 @@ export default function Race() {
     }
     const chosen = pool.slice(0, RACERS);
     setCodes(chosen.map((ci) => ({ code: COUNTRIES[ci].code, hue: COUNTRIES[ci].hue })));
-    renderRef.current = chosen.map(() => ({ x: 0, y: 0, r: 0, dx: 1, dy: 0, dist: 0 }));
+    renderRef.current = chosen.map(() => ({ x: 0, y: 0, r: 0, dx: 1, dy: 0, dist: 0, flash: 0, good: false }));
     s.active = chosen.map((ci, k) => {
       const lane = k % 5;
       const row = Math.floor(k / 5);
@@ -509,14 +463,17 @@ export default function Race() {
         effMul: 1,
         effTime: 0,
         obCool: 0,
+        flash: 0,
+        flashGood: false,
       };
     });
     s.finishers = [];
-    // 10 obstacles: one of each type, then random, at random spots
+    // obstacles: one of each type, then random, at random spots
     s.obstacles = Array.from({ length: OBSTACLES }, (_, k) => ({
-      u: (k + 0.5) / OBSTACLES + (Math.random() - 0.5) * 0.06,
-      laneN: (Math.random() * 2 - 1) * 0.72,
+      u: (k + 0.5) / OBSTACLES + (Math.random() - 0.5) * 0.04,
+      laneN: (Math.random() * 2 - 1) * 0.75,
       type: k < OB_TYPES.length ? OB_TYPES[k] : OB_TYPES[Math.floor(Math.random() * OB_TYPES.length)],
+      lit: 0,
     }));
     s.countdown = 3;
     s.goFlash = 0;
@@ -568,8 +525,10 @@ export default function Race() {
         } else {
           st.goFlash = Math.max(0, st.goFlash - dt);
           st.elapsed += dt;
+          for (const ob of st.obstacles) ob.lit = Math.max(0, ob.lit - dt);
           const spread = g.bandHalf - g.size * 0.5;
           for (const r of st.active) {
+            r.flash = Math.max(0, r.flash - dt);
             if (r.place > 0) continue;
             r.effTime = Math.max(0, r.effTime - dt);
             r.obCool = Math.max(0, r.obCool - dt);
@@ -594,6 +553,10 @@ export default function Race() {
                     r.scale = Math.max(0.62, Math.min(1.5, r.scale * def.scale));
                     sound.size();
                   }
+                  // light the obstacle up + flash the marble edge (~1s)
+                  ob.lit = 1;
+                  r.flash = 1;
+                  r.flashGood = def.good;
                   r.obCool = 0.35;
                   break;
                 }
@@ -639,17 +602,12 @@ export default function Race() {
           dx: p2.x - p.x,
           dy: p2.y - p.y,
           dist: r.dist,
+          flash: r.flash,
+          good: r.flashGood,
         };
       }
       if (st.countdown > 0 || st.goFlash > 0) {
         drawCountdown(ctx, g, st.countdown, st.goFlash);
-      } else {
-        const racing = st.active.filter((r) => r.place === 0);
-        const top = [
-          ...st.finishers,
-          ...racing.sort((a, b) => b.dist - a.dist).map((r) => r.ci),
-        ].slice(0, 3);
-        drawTop3(ctx, g, top, st.sprites);
       }
 
       st.raf = requestAnimationFrame(draw);

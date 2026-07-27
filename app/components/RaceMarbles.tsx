@@ -14,7 +14,12 @@ export type MarbleRender = {
   dx: number; // unit travel direction (screen)
   dy: number;
   dist: number;
+  flash: number; // 0..1 hit-flash timer
+  good: boolean; // green (good) or red (bad) flash
 };
+
+const GREEN = new THREE.Color("#3ee06a");
+const RED = new THREE.Color("#ff4a44");
 
 function Ball({
   code,
@@ -57,6 +62,15 @@ function Ball({
       m.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(axis, dRoll));
     }
     prev.current = d.dist;
+    // Hit flash: the edge glows red (bad) or green (good) for ~1s.
+    const mat = m.material as THREE.MeshPhysicalMaterial;
+    if (d.flash > 0) {
+      mat.emissive.copy(d.good ? GREEN : RED);
+      mat.emissiveIntensity = 0.9 * d.flash;
+    } else {
+      mat.emissive.copy(emissive);
+      mat.emissiveIntensity = 0.06;
+    }
   });
 
   return (
