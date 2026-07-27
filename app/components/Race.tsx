@@ -241,11 +241,11 @@ function drawTrack(ctx: Ctx, g: Geo) {
   ctx.lineWidth = g.bandHalf * 2;
   ctx.strokeStyle = ROAD;
   ctx.stroke();
-  // subtle dashed racing line
+  // very dim dashed racing line
   trackPath(ctx, g);
-  ctx.lineWidth = 2 * g.dpr;
-  ctx.setLineDash([10 * g.dpr, 12 * g.dpr]);
-  ctx.strokeStyle = "rgba(255,255,255,0.22)";
+  ctx.lineWidth = 1.5 * g.dpr;
+  ctx.setLineDash([9 * g.dpr, 13 * g.dpr]);
+  ctx.strokeStyle = "rgba(255,255,255,0.08)";
   ctx.stroke();
   ctx.setLineDash([]);
   ctx.restore();
@@ -358,9 +358,9 @@ function drawObstacles(ctx: Ctx, g: Geo, obstacles: Obstacle[]) {
 function drawFinish(ctx: Ctx, g: Geo) {
   const p = pathPoint(g, 0);
   ctx.save();
-  ctx.lineWidth = 4 * g.dpr;
+  ctx.lineWidth = 3 * g.dpr;
   ctx.setLineDash([7 * g.dpr, 7 * g.dpr]);
-  ctx.strokeStyle = "rgba(255,255,255,0.9)";
+  ctx.strokeStyle = "rgba(255,255,255,0.3)";
   ctx.beginPath();
   ctx.moveTo(p.x - p.nx * g.bandHalf, p.y - p.ny * g.bandHalf);
   ctx.lineTo(p.x + p.nx * g.bandHalf, p.y + p.ny * g.bandHalf);
