@@ -33,12 +33,12 @@ type Winner = { country: Country; place: number };
 
 // Obstacle types + their effect. Fires are gone - nothing removes a marble.
 type ObType = "boost" | "mud" | "tar" | "banana" | "shrink" | "grow";
-type ObShape = "boost" | "plain" | "banana" | "up" | "down";
+type ObShape = "bolt" | "droplet" | "skull" | "banana" | "up" | "down";
 type Obstacle = { u: number; laneN: number; type: ObType };
 const OB: Record<ObType, { color: string; shape: ObShape; mul?: number; time?: number; scale?: number }> = {
-  boost: { color: "#33c65a", shape: "boost", mul: 1.8, time: 1.2 }, // green mud - speed up
-  mud: { color: "#7a4a24", shape: "plain", mul: 0.55, time: 1.3 }, // brown mud - slow
-  tar: { color: "#171922", shape: "plain", mul: 0.4, time: 1.6 }, // black mud - slower
+  boost: { color: "#33c65a", shape: "bolt", mul: 1.8, time: 1.2 }, // green mud - speed up
+  mud: { color: "#7a4a24", shape: "droplet", mul: 0.55, time: 1.3 }, // brown mud - slow
+  tar: { color: "#171922", shape: "skull", mul: 0.4, time: 1.6 }, // black tar - slowest
   banana: { color: "#f6d743", shape: "banana", mul: 0.45, time: 1.1 }, // banana - slip
   shrink: { color: "#2aa8ff", shape: "down", scale: 0.78 }, // small -> faster
   grow: { color: "#b45cff", shape: "up", scale: 1.28 }, // big -> slower
@@ -284,43 +284,76 @@ function drawTrack(ctx: Ctx, g: Geo) {
   ctx.restore();
 }
 
+// Distinct white icon per spell so each is easy to tell apart at a glance.
 function obShape(ctx: Ctx, shape: ObShape, x: number, y: number, s: number) {
-  if (shape === "plain") return;
+  const white = "rgba(255,255,255,0.97)";
   if (shape === "banana") {
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(-0.5);
     ctx.beginPath();
-    ctx.arc(0, -s * 0.15, s, Math.PI * 0.15, Math.PI * 0.9);
-    ctx.lineWidth = s * 0.55;
+    ctx.arc(0, -s * 0.1, s * 0.95, Math.PI * 0.14, Math.PI * 0.9);
+    ctx.lineWidth = s * 0.5;
     ctx.lineCap = "round";
-    ctx.strokeStyle = "#8a5a10";
+    ctx.strokeStyle = "#b3801a";
     ctx.stroke();
     ctx.restore();
     return;
   }
-  ctx.fillStyle = "rgba(255,255,255,0.96)";
-  if (shape === "up" || shape === "down") {
-    const d = shape === "up" ? -1 : 1;
+  if (shape === "bolt") {
+    ctx.fillStyle = "#fff27a";
+    ctx.strokeStyle = "rgba(0,0,0,0.25)";
+    ctx.lineWidth = s * 0.06;
     ctx.beginPath();
-    ctx.moveTo(x, y + d * s * 0.7);
-    ctx.lineTo(x - s * 0.72, y - d * s * 0.5);
-    ctx.lineTo(x + s * 0.72, y - d * s * 0.5);
+    ctx.moveTo(x + s * 0.28, y - s * 0.78);
+    ctx.lineTo(x - s * 0.42, y + s * 0.12);
+    ctx.lineTo(x - s * 0.04, y + s * 0.12);
+    ctx.lineTo(x - s * 0.24, y + s * 0.78);
+    ctx.lineTo(x + s * 0.46, y - s * 0.12);
+    ctx.lineTo(x + s * 0.08, y - s * 0.12);
     ctx.closePath();
     ctx.fill();
-  } else if (shape === "boost") {
-    ctx.strokeStyle = "rgba(255,255,255,0.96)";
-    ctx.lineWidth = s * 0.28;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    for (const dy of [-s * 0.3, s * 0.28]) {
-      ctx.beginPath();
-      ctx.moveTo(x - s * 0.6, y + dy + s * 0.28);
-      ctx.lineTo(x, y + dy - s * 0.18);
-      ctx.lineTo(x + s * 0.6, y + dy + s * 0.28);
-      ctx.stroke();
-    }
+    ctx.stroke();
+    return;
   }
+  if (shape === "droplet") {
+    ctx.fillStyle = white;
+    ctx.beginPath();
+    ctx.moveTo(x, y - s * 0.8);
+    ctx.bezierCurveTo(x + s * 0.78, y + s * 0.05, x + s * 0.5, y + s * 0.8, x, y + s * 0.8);
+    ctx.bezierCurveTo(x - s * 0.5, y + s * 0.8, x - s * 0.78, y + s * 0.05, x, y - s * 0.8);
+    ctx.closePath();
+    ctx.fill();
+    return;
+  }
+  if (shape === "skull") {
+    ctx.fillStyle = white;
+    ctx.beginPath();
+    ctx.arc(x, y - s * 0.12, s * 0.62, Math.PI, 0);
+    ctx.lineTo(x + s * 0.45, y + s * 0.28);
+    ctx.lineTo(x + s * 0.22, y + s * 0.28);
+    ctx.lineTo(x + s * 0.22, y + s * 0.5);
+    ctx.lineTo(x - s * 0.22, y + s * 0.5);
+    ctx.lineTo(x - s * 0.22, y + s * 0.28);
+    ctx.lineTo(x - s * 0.45, y + s * 0.28);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "rgba(0,0,0,0.8)";
+    ctx.beginPath();
+    ctx.arc(x - s * 0.24, y - s * 0.08, s * 0.16, 0, Math.PI * 2);
+    ctx.arc(x + s * 0.24, y - s * 0.08, s * 0.16, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+  // grow = big solid up-triangle, shrink = solid down-triangle. Very distinct.
+  ctx.fillStyle = white;
+  const d = shape === "up" ? -1 : 1;
+  ctx.beginPath();
+  ctx.moveTo(x, y + d * s * 0.72);
+  ctx.lineTo(x - s * 0.72, y - d * s * 0.5);
+  ctx.lineTo(x + s * 0.72, y - d * s * 0.5);
+  ctx.closePath();
+  ctx.fill();
 }
 
 // A glossy spinning power-orb with a bright white glow inside (Mario-Kart-item
