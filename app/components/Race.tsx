@@ -206,9 +206,9 @@ function separate(active: Racer[], g: Geo) {
 type Ctx = CanvasRenderingContext2D;
 
 // Neutral, all-gray look so the colourful country marbles are the only pop.
-const BG = "#15171c";
-const INFIELD = "#474b54";
-const ROAD = "#474b54";
+const BG = "#0f1116";
+const INFIELD = "#2c2f36"; // darker gray centre (distinct from the road, not black)
+const ROAD = "#565a64"; // lighter gray racing surface
 
 function drawScenery(ctx: Ctx, g: Geo) {
   ctx.fillStyle = BG;
@@ -236,16 +236,32 @@ function drawTrack(ctx: Ctx, g: Geo) {
   );
   ctx.fillStyle = INFIELD;
   ctx.fill();
-  // the gray road band
+  // the lighter gray road band (the racing surface stands out from the infield)
   trackPath(ctx, g);
   ctx.lineWidth = g.bandHalf * 2;
   ctx.strokeStyle = ROAD;
   ctx.stroke();
-  // very dim dashed racing line
+  // crisp edge lines at the inner + outer road boundaries = clear separation
+  const edge = (inset: number) => {
+    ctx.beginPath();
+    ctx.roundRect(
+      g.cl.L + inset,
+      g.cl.T + inset,
+      g.cl.R - g.cl.L - inset * 2,
+      g.cl.B - g.cl.T - inset * 2,
+      Math.max(1, g.cl.r + inset),
+    );
+    ctx.lineWidth = 2 * g.dpr;
+    ctx.strokeStyle = "rgba(255,255,255,0.5)";
+    ctx.stroke();
+  };
+  edge(-g.bandHalf); // outer edge
+  edge(g.bandHalf); // inner edge
+  // very dim dashed racing line down the middle of the road
   trackPath(ctx, g);
   ctx.lineWidth = 1.5 * g.dpr;
   ctx.setLineDash([9 * g.dpr, 13 * g.dpr]);
-  ctx.strokeStyle = "rgba(255,255,255,0.08)";
+  ctx.strokeStyle = "rgba(255,255,255,0.1)";
   ctx.stroke();
   ctx.setLineDash([]);
   ctx.restore();
