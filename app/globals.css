@@ -53,12 +53,27 @@ body {
   animation: spin3d 3.2s linear infinite;
 }
 
+@keyframes confetti-fall {
+  0% {
+    transform: translateY(0) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(110vh) rotate(680deg);
+    opacity: 0.9;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .pop {
     animation: none;
     opacity: 1;
   }
-  .spin3d {
+  .spin3d,
+  .confetti-piece {
     animation: none;
+  }
+  .confetti-piece {
+    display: none;
   }
 }

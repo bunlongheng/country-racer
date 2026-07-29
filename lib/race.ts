@@ -11,7 +11,7 @@ export type Racer = {
 };
 
 export const TRACK_LEN = 1000; // distance of one lap
-export const LAPS = 3;
+export const LAPS = 1;
 export const FINISH = TRACK_LEN * LAPS; // total race distance
 export const BASE_SPEED = 62; // tuned so the whole race runs ~35-55s
 

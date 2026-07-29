@@ -85,7 +85,7 @@ test("wobble is deterministic for the same seed and time", () => {
   assert.notEqual(wobble(7, 3.5), wobble(8, 3.5));
 });
 
-test("a full simulated race always crowns 3 finishers within ~55s", () => {
+test("a full simulated one-lap race crowns 3 finishers in a sane window", () => {
   const racers: Racer[] = Array.from({ length: 194 }, (_, i) => ({
     i,
     dist: 0,
@@ -102,6 +102,6 @@ test("a full simulated race always crowns 3 finishers within ~55s", () => {
     t += dt;
   }
   assert.ok(finished >= 3, "at least 3 must finish");
-  assert.ok(t >= 25 && t <= 60, `race length out of 25-60s window: ${t.toFixed(1)}s`);
+  assert.ok(t >= 5 && t <= 40, `race length out of 5-40s window: ${t.toFixed(1)}s`);
   assert.equal(standings(racers).length, 194);
 });

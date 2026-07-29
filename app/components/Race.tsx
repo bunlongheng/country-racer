@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { COUNTRIES, type Country } from "../data/countries";
 import { FINISH, TRACK_LEN, stepRacer } from "@/lib/race";
@@ -406,6 +406,38 @@ function drawCountdown(ctx: Ctx, g: Geo, countdown: number, goFlash: number) {
   ctx.textBaseline = "alphabetic";
 }
 
+// Falling confetti for the winners screen.
+function Confetti() {
+  const pieces = useMemo(
+    () =>
+      Array.from({ length: 70 }, (_, i) => ({
+        left: (i * 61) % 100,
+        delay: (i % 16) * 0.16,
+        hue: (i * 47) % 360,
+        dur: 2 + (i % 6) * 0.4,
+        size: 7 + (i % 4) * 3,
+      })),
+    [],
+  );
+  return (
+    <div className="pointer-events-none absolute inset-0 overflow-hidden">
+      {pieces.map((p, i) => (
+        <span
+          key={i}
+          className="confetti-piece absolute top-[-6%] block rounded-sm"
+          style={{
+            left: `${p.left}%`,
+            width: p.size,
+            height: p.size,
+            background: `hsl(${p.hue}, 90%, 60%)`,
+            animation: `confetti-fall ${p.dur}s ${p.delay}s cubic-bezier(0.3,0.1,0.3,1) infinite`,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
 export default function Race() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [phase, setPhase] = useState<"loading" | "racing" | "done">("loading");
@@ -674,28 +706,29 @@ export default function Race() {
       )}
 
       {phase === "done" && podium.length === NEED && (
-        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-black/70 backdrop-blur-sm">
-          <h1 className="pop mb-8 text-3xl font-bold sm:text-5xl">Podium</h1>
-          <div className="pop flex items-end gap-5 sm:gap-10">
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center overflow-hidden bg-black/75 backdrop-blur-sm">
+          <Confetti />
+          <h1 className="pop mb-10 text-4xl font-bold sm:text-6xl">Winners</h1>
+          <div className="pop flex items-end gap-2 sm:gap-8">
             {[1, 0, 2].map((k) => {
               const w = podium[k];
               const medal = ["🥇", "🥈", "🥉"][w.place - 1];
-              const px = w.place === 1 ? 138 : 100;
-              const lift = w.place === 1 ? "mb-6" : "";
+              const px = w.place === 1 ? 168 : 104;
+              const lift = w.place === 1 ? "mb-8" : "";
               return (
                 <div key={w.country.code} className={`flex flex-col items-center ${lift}`}>
-                  <div className="mb-2 text-4xl sm:text-5xl">{medal}</div>
-                  <div style={{ width: px, height: px }} className="drop-shadow-[0_10px_26px_rgba(0,0,0,0.55)]">
+                  <div className="mb-2 text-5xl sm:text-6xl">{medal}</div>
+                  <div style={{ width: px, height: px }} className="drop-shadow-[0_12px_30px_rgba(0,0,0,0.6)]">
                     <PodiumMarble3D code={w.country.code} hue={w.country.hue} />
                   </div>
-                  <p className="mt-3 text-base font-bold sm:text-xl">{w.country.name}</p>
+                  <p className="mt-3 text-lg font-bold sm:text-2xl">{w.country.name}</p>
                 </div>
               );
             })}
           </div>
           <button
             onClick={startRace}
-            className="mt-10 rounded-full bg-white px-8 py-3 text-base font-bold text-black transition hover:scale-105 active:scale-95"
+            className="mt-12 rounded-full bg-white px-10 py-3.5 text-lg font-bold text-black transition hover:scale-105 active:scale-95"
           >
             Race Again
           </button>
