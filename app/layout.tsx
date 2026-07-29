@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Fredoka } from "next/font/google";
 import "./globals.css";
+import RegisterSW from "./components/RegisterSW";
 
 const fredoka = Fredoka({
   variable: "--font-display",
@@ -12,6 +13,11 @@ export const metadata: Metadata = {
   title: "Country Racer",
   description:
     "All 194 countries race as glossy flag marbles around an oval track. Sit back and watch who takes gold, silver, and bronze. A tiny, playful game for kids.",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "Country Racer",
+  },
 };
 
 export const viewport: Viewport = {
@@ -28,6 +34,7 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${fredoka.variable} h-full antialiased`}>
       <body className="min-h-full" suppressHydrationWarning>
+        <RegisterSW />
         {children}
       </body>
     </html>

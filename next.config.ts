@@ -46,6 +46,12 @@ const nextConfig: NextConfig = {
         source: "/",
         headers: [{ key: "Cache-Control", value: "no-store, must-revalidate" }],
       },
+      // The service worker script itself must never be cached, or the browser
+      // can get stuck on a stale worker across deploys.
+      {
+        source: "/sw.js",
+        headers: [{ key: "Cache-Control", value: "no-store, must-revalidate" }],
+      },
     ];
   },
 };
