@@ -5,7 +5,7 @@ export default function manifest(): MetadataRoute.Manifest {
     name: "Country Racer",
     short_name: "Country Racer",
     description:
-      "All 194 countries race as glossy flag marbles around an oval track.",
+      "10 random countries race as glossy flag marbles around a themed oval track.",
     start_url: "/",
     display: "standalone",
     background_color: "#000000",

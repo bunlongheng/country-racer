@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "prepare": "husky",
-    "test": "node --experimental-strip-types --test tests/race.test.ts tests/countries.test.ts",
+    "test": "node --experimental-strip-types --test tests/race.test.ts tests/countries.test.ts tests/geometry.test.ts",
     "test:e2e": "playwright test"
   },
   "dependencies": {

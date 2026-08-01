@@ -1,83 +1,92 @@
 # Country Racer
 
-> Load the page and all 194 countries race as glossy flag marbles around an oval track, hurdling the wall at China, until a gold, silver, and bronze podium is crowned. No menus, no clicks - just watch. A tiny, playful game for kids.
+> Pick a themed stage, set the laps, and watch 10 random countries race as glossy 3D flag marbles around an oval track - dodging hazards, jockeying the whole way - until a gold, silver, and bronze podium is crowned. A tiny, playful game for kids.
 
 <p>
   <img alt="CI" src="https://github.com/bunlongheng/country-racer/actions/workflows/ci.yml/badge.svg" />
   <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-brightgreen.svg" />
   <img alt="Next.js" src="https://img.shields.io/badge/Next.js-16-black?logo=nextdotjs" />
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white" />
-  <img alt="Zero deps" src="https://img.shields.io/badge/runtime%20deps-react%20only-brightgreen" />
+  <img alt="PWA" src="https://img.shields.io/badge/PWA-offline-5a0fc8" />
 </p>
 
 **Live:** https://country-racer-bheng.vercel.app
 
-![The race in progress](docs/screenshots/race.png)
+![A race in progress](docs/screenshots/race.png)
 
 ---
 
 ## What it does
 
-- On load, all **194 recognized countries** (193 UN members + Vatican City) line up as **glossy 3D-look flag marbles** and start racing around an oval loop.
-- They jockey the whole way - constant overtaking - and must push through the **hurdle band at China**, the host, which sits glinting in the centre.
-- A **live top-5 standings** panel updates in real time so you can follow who is leading and which lap they are on.
-- The whole race runs in **about 35-55 seconds**, then the first 3 across the line take the **podium**: gold, silver, bronze.
-- Tap **Race Again** for a fresh random field. That is the only control.
+- On the setup screen you pick a **stage**, the number of **laps** (rounds), and whether to show the **live results** board or let it **auto-play** hands-free.
+- **10 random countries** line up as **true 3D glossy flag marbles** (WebGL) and race around a themed oval track.
+- **8 themed stages** paint the whole map as their scene - Horse Race, Soccer Field, Football Field, Stadium, Airport, River Side, Beach Vibe, Snow Park - and the marble runs on the terrain.
+- **Hazards** spawn on the track 2 at a time every second - boost, mud, tar, banana, shrink, grow - so the pack keeps shuffling.
+- A **live top-5 board** (top-left) and **1/2/3 medal badges** over the leaders track the standings in real time.
+- After the set laps, the first 3 across the line take the **podium** - gold, silver, bronze - with confetti and a celebration fanfare.
+- Each stage has its own **synth music** (starts on GO) and all sound effects are synthesised - **zero audio files**.
 
-![The podium](docs/screenshots/podium.png)
+![The Winners podium](docs/screenshots/podium.png)
 
 ---
 
 ## How the race works
 
-The race is a small, **pure, unit-tested core** (`lib/race.ts`) driven by a single `requestAnimationFrame` loop on a 2D canvas.
+The race is a small, **pure, unit-tested core** driven by a single `requestAnimationFrame` loop. The 2D canvas draws the themed track + HUD; a transparent React-Three-Fiber layer renders the glossy 3D marbles over it.
 
 ```mermaid
 flowchart LR
-  A[194 racers<br/>random form] --> B[step by real dt<br/>speed wobbles]
-  B --> C{inside the<br/>China hurdle?}
-  C -- yes --> D[slow to 50%]
+  A[10 random racers<br/>random form] --> B[step by real dt<br/>speed wobbles]
+  B --> C{rolled over<br/>a hazard?}
+  C -- yes --> D[apply effect<br/>boost / mud / grow ...]
   C -- no --> E[full speed]
-  D --> F{crossed 3 laps?}
+  D --> F[separate<br/>no overlap]
   E --> F
-  F -- no --> B
-  F -- yes --> G[assign place<br/>furthest first]
-  G --> H{3 finished?}
-  H -- no --> B
-  H -- yes --> I[Podium: gold / silver / bronze]
+  F --> G{crossed all laps?}
+  G -- no --> B
+  G -- yes --> H[assign place<br/>furthest first]
+  H --> I{3 finished?}
+  I -- no --> B
+  I -- yes --> J[3s hold -> Winners]
 ```
 
-Three ideas keep it fun **and** smooth:
+Three ideas keep it fun **and** correct:
 
-- **194 racers stay buttery-smooth** because each country's flag is **pre-baked once** into a glossy marble sprite (circular flag + highlight + spherical rim), so every frame is just cheap sprite blits - no per-frame drawing cost, even on a phone.
-- **Constant overtaking** comes from a deterministic two-sine `wobble` per racer, so the pack shuffles the whole way without any real randomness in the physics.
-- **The clock is real time**, so the race always finishes in a bounded ~35-55 seconds regardless of frame rate.
+- **Deterministic overtaking** comes from a two-sine `wobble` per racer, so the pack shuffles the whole way with no real randomness in the physics (`lib/race.ts`).
+- **No visible overlap** even on the tight bends: marbles are pushed apart in **real screen space**, then the push is split back into along-track and lateral motion via the local track frame (`lib/geometry.ts`).
+- **The clock is real time**, so a lap always takes the same wall-clock span regardless of frame rate.
 
-Every one of those rules lives behind a pure function with tests (`tests/race.test.ts`).
+The engine and the geometry both live behind pure functions with tests (`tests/race.test.ts`, `tests/geometry.test.ts`).
 
 ---
 
 ## Architecture
 
-| Layer | Role |
+| Module | Role |
 | --- | --- |
-| `app/page.tsx` + `layout.tsx` | Static server shell, metadata, font, icon |
-| `Race.tsx` | Canvas + rAF loop + podium (one client component) |
-| `lib/race.ts` | Pure, dependency-free, unit-tested race logic |
-| `data/countries.ts` | 194 countries (code, name, accent hue) |
+| `app/page.tsx` + `layout.tsx` | Static server shell, metadata, font, PWA registration |
+| `app/components/Race.tsx` | Canvas + rAF loop, HUD, and every screen (one client component) |
+| `app/components/RaceMarbles.tsx` | React-Three-Fiber 3D marble overlay |
+| `lib/race.ts` | Pure, dependency-free, unit-tested race engine |
+| `lib/geometry.ts` | Pure oval geometry + real-space anti-overlap solver (tested) |
+| `lib/sound.ts` | Web Audio synth - SFX + per-stage music, zero files |
+| `app/data/stages.ts` | The 8 themed stages (painters + palettes) |
+| `app/data/countries.ts` | 194 countries (code, name, accent hue) |
 | `public/flags/` | 194 self-hosted flag PNGs |
+| `public/sw.js` | Hand-written service worker for offline play |
 
-The 194 flags are **self-hosted**, so there is no third-party CDN dependency and the Content-Security-Policy stays locked to `'self'`. The only runtime dependencies are React and Next - no game engine, no 3D library.
+Everything is **self-hosted** - the 194 flags, the font (`next/font`), and all audio (synthesised) - so there is no third-party CDN and the Content-Security-Policy stays locked to `'self'`.
 
 ## Design decisions and trade-offs
 
 | Decision | Chosen | Alternative | Why | Cost we accept |
 | --- | --- | --- | --- | --- |
-| Renderer | 2D canvas sprites | 194 WebGL/3D marbles | Smooth with 194 racers on mobile | 2D "glossy" look, not true 3D |
-| Marbles | Pre-baked sprites | Draw flag + gloss each frame | Near-zero per-frame cost | A one-time bake on load |
-| Flags | Self-hosted PNGs | Remote flag CDN | No third-party dependency; CSP `'self'` | ~800KB committed |
-| Randomness | Deterministic sine wobble | Real RNG per frame | Testable, reproducible physics | Tuned, not truly random paths |
-| Race length | Real-time clock + 3-lap finish | Fixed frame count | Always 35-55s on any device | - |
+| Marbles | True 3D (three.js / R3F) | 2D sprites | Genuinely glossy, rolling spheres | A WebGL layer over the canvas |
+| Field size | 10 racers per race | All 194 at once | Readable, uncrowded track | Only 10 flags per race |
+| Overlap | Real-space solver | Flat (u, lane) solver | Correct on the tight oval bends | ~20 relaxation passes/frame |
+| Audio | Synthesised (Web Audio) | Audio files | No licensing, works offline, CSP `'self'` | Chiptune, not produced tracks |
+| Flags | Self-hosted PNGs | Remote flag CDN | No third-party dependency | ~800KB committed |
+| Offline | Hand-written SW | next-pwa plugin | Plugin breaks on Next 16 / Turbopack | Maintain ~40 lines of SW |
 
 ---
 
@@ -85,11 +94,13 @@ The 194 flags are **self-hosted**, so there is no third-party CDN dependency and
 
 - **Framework:** Next.js 16 (App Router, static prerender)
 - **UI runtime:** React 19
-- **Rendering:** HTML5 Canvas 2D
+- **3D:** three.js + @react-three/fiber + drei (WebGL marbles)
+- **Track + HUD:** HTML5 Canvas 2D
 - **Language:** TypeScript (strict)
 - **Styling:** Tailwind CSS 4
+- **Audio:** Web Audio API (synth)
 - **Tests:** node:test (unit) + Playwright (e2e)
-- **Hosting:** Vercel
+- **Hosting:** Vercel - PWA, offline-capable
 
 ---
 
@@ -112,31 +123,34 @@ No environment variables are required - it is a fully static, self-contained gam
 | `npm run build` | Production build |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | ESLint (typescript-eslint + next core-web-vitals) |
-| `npm test` | Unit tests for the race core + country data |
+| `npm test` | Unit tests: race engine, geometry, and country data |
 | `npm run test:e2e` | Playwright end-to-end race |
 
 ---
-
-## Configuration
-
-No environment variables required.
 
 ## Project layout
 
 ```
 app/
-  page.tsx              server shell
-  components/Race.tsx   canvas race loop + podium
-  data/countries.ts     194 countries (code, name, accent hue)
+  page.tsx                 server shell
+  layout.tsx               metadata, font, PWA registration
+  components/Race.tsx       canvas race loop + HUD + screens
+  components/RaceMarbles.tsx  3D marble overlay (R3F)
+  data/stages.ts            8 themed stages
+  data/countries.ts         194 countries (code, name, accent hue)
 lib/
-  race.ts               pure, tested race logic
-public/flags/           194 self-hosted flag PNGs
-tests/                  unit tests (race + data)
-e2e/                    Playwright race test
+  race.ts                  pure, tested race engine
+  geometry.ts              pure oval math + anti-overlap solver (tested)
+  sound.ts                 Web Audio synth (SFX + per-stage music)
+public/
+  flags/                   194 self-hosted flag PNGs
+  sw.js                    offline service worker
+tests/                     unit tests (race, geometry, data)
+e2e/                       Playwright race test
 ```
 
 ---
 
 ## License
 
-[MIT](LICENSE) (c) Bunlong Heng
+MIT - see [LICENSE](LICENSE).

@@ -12,7 +12,7 @@ const fredoka = Fredoka({
 export const metadata: Metadata = {
   title: "Country Racer",
   description:
-    "All 194 countries race as glossy flag marbles around an oval track. Sit back and watch who takes gold, silver, and bronze. A tiny, playful game for kids.",
+    "10 random countries race as glossy flag marbles around a themed oval track - pick a stage, set the laps, and watch who takes gold, silver, and bronze. A tiny, playful game for kids.",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
