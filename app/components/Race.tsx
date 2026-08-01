@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { COUNTRIES, type Country } from "../data/countries";
-import { TRACK_LEN, stepRacer } from "@/lib/race";
+import { TRACK_LEN, stepRacer, standings } from "@/lib/race";
 import { sound } from "@/lib/sound";
 import SoundToggle from "./SoundToggle";
 import type { MarbleRender } from "./RaceMarbles";
@@ -88,6 +88,7 @@ type Stage = {
   infield: string; // centre fill
   line: string; // dashed centre-line colour
   edge: string; // road edge line colour
+  song: string; // key into the themed music loop for this scene
   decor: (ctx: CanvasRenderingContext2D, g: Geo) => void; // themed infield art
 };
 // STAGES are defined lower down, next to the drawing helpers they use.
@@ -348,9 +349,32 @@ function stageSoccer(ctx: Ctx, g: Geo) {
   ctx.beginPath();
   ctx.arc(cx, cy, 4 * g.dpr, 0, Math.PI * 2);
   ctx.fill();
-  const gw = g.W * 0.22, gh = Math.min(g.W, g.H) * 0.07; // goal boxes
+  const gw = g.W * 0.22, gh = Math.min(g.W, g.H) * 0.07; // goal (penalty) boxes
   ctx.strokeRect(cx - gw / 2, m, gw, gh);
   ctx.strokeRect(cx - gw / 2, g.H - m - gh, gw, gh);
+  // Goal + net at each end: a mesh grid framed by posts, on the goal line.
+  const nw = g.W * 0.11, nh = Math.min(g.W, g.H) * 0.05;
+  const net = (ny: number) => {
+    ctx.strokeStyle = "rgba(255,255,255,0.4)"; // mesh
+    ctx.lineWidth = 1 * g.dpr;
+    ctx.beginPath();
+    for (let k = 0; k <= 9; k++) {
+      const x = cx - nw / 2 + (k / 9) * nw;
+      ctx.moveTo(x, ny);
+      ctx.lineTo(x, ny + nh);
+    }
+    for (let k = 0; k <= 4; k++) {
+      const y = ny + (k / 4) * nh;
+      ctx.moveTo(cx - nw / 2, y);
+      ctx.lineTo(cx + nw / 2, y);
+    }
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(255,255,255,0.95)"; // posts + crossbar
+    ctx.lineWidth = 3 * g.dpr;
+    ctx.strokeRect(cx - nw / 2, ny, nw, nh);
+  };
+  net(m); // top goal
+  net(g.H - m - nh); // bottom goal
   ctx.restore();
 }
 
@@ -594,15 +618,18 @@ function stageSnow(ctx: Ctx, g: Geo) {
   ctx.restore();
 }
 
+// Roads are a themed TERRAIN surface for each scene (a dirt track, a mown lane, a
+// red athletics track, a sandy path, packed snow...) - never a flat black band -
+// so the whole map reads as one cohesive theme and the marble runs on the terrain.
 const STAGES: Stage[] = [
-  { name: "Horse Race", bg: "#140d05", road: "#101114", infield: "#3f7a3a", line: "rgba(255,255,255,0.25)", edge: "rgba(255,255,255,0.6)", decor: stageHorse },
-  { name: "Soccer Field", bg: "#0a1f0d", road: "#101114", infield: "#2f8f3a", line: "rgba(255,255,255,0.18)", edge: "rgba(255,255,255,0.5)", decor: stageSoccer },
-  { name: "Football Field", bg: "#0a1f0d", road: "#101114", infield: "#2c7a34", line: "rgba(255,255,255,0.18)", edge: "rgba(255,255,255,0.5)", decor: stageFootball },
-  { name: "Stadium", bg: "#080a10", road: "#101114", infield: "#2f7d3a", line: "rgba(255,255,255,0.2)", edge: "rgba(255,255,255,0.55)", decor: stageStadium },
-  { name: "Airport", bg: "#0b0e13", road: "#101114", infield: "#4a4f57", line: "rgba(255,235,120,0.5)", edge: "rgba(255,255,255,0.55)", decor: stageAirport },
-  { name: "River Side", bg: "#07171c", road: "#101114", infield: "#1c6f8c", line: "rgba(255,255,255,0.2)", edge: "rgba(255,255,255,0.55)", decor: stageRiver },
-  { name: "Beach Vibe", bg: "#062330", road: "#101114", infield: "#e8cd94", line: "rgba(120,90,40,0.35)", edge: "rgba(255,255,255,0.7)", decor: stageBeach },
-  { name: "Snow Park", bg: "#0a1622", road: "#101114", infield: "#d7e6f0", line: "rgba(70,110,150,0.35)", edge: "rgba(255,255,255,0.8)", decor: stageSnow },
+  { name: "Horse Race", bg: "#140d05", road: "#9a6a3a", infield: "#3f7a3a", line: "rgba(255,255,255,0.22)", edge: "rgba(255,255,255,0.45)", song: "horse", decor: stageHorse },
+  { name: "Soccer Field", bg: "#0a1f0d", road: "#3aa14a", infield: "#2f8f3a", line: "rgba(255,255,255,0.28)", edge: "rgba(255,255,255,0.5)", song: "soccer", decor: stageSoccer },
+  { name: "Football Field", bg: "#0a1f0d", road: "#369640", infield: "#2c7a34", line: "rgba(255,255,255,0.28)", edge: "rgba(255,255,255,0.5)", song: "football", decor: stageFootball },
+  { name: "Stadium", bg: "#080a10", road: "#b5533f", infield: "#2f7d3a", line: "rgba(255,255,255,0.3)", edge: "rgba(255,255,255,0.55)", song: "stadium", decor: stageStadium },
+  { name: "Airport", bg: "#0b0e13", road: "#565d68", infield: "#4a4f57", line: "rgba(255,235,120,0.55)", edge: "rgba(255,255,255,0.5)", song: "airport", decor: stageAirport },
+  { name: "River Side", bg: "#07171c", road: "#cbb184", infield: "#1c6f8c", line: "rgba(255,255,255,0.28)", edge: "rgba(255,255,255,0.5)", song: "river", decor: stageRiver },
+  { name: "Beach Vibe", bg: "#062330", road: "#d8b878", infield: "#e8cd94", line: "rgba(120,90,40,0.4)", edge: "rgba(255,255,255,0.6)", song: "beach", decor: stageBeach },
+  { name: "Snow Park", bg: "#0a1622", road: "#eef5fb", infield: "#d7e6f0", line: "rgba(70,110,150,0.4)", edge: "rgba(120,160,200,0.55)", song: "snow", decor: stageSnow },
 ];
 const STAGE_ICON = ["🐎", "⚽", "🏈", "🏟️", "✈️", "🛶", "🏖️", "⛄"];
 
@@ -749,6 +776,89 @@ function drawLaps(ctx: Ctx, g: Geo, lap: number, total: number) {
   ctx.restore();
 }
 
+const MEDAL = ["#ffd54a", "#d8dee6", "#d08a4e"]; // gold, silver, bronze
+const MEDAL_RING = ["#b8860b", "#8a929c", "#8a5a2e"];
+
+// Small gold/silver/bronze position badge above the top-3 marbles' heads.
+function drawRankBadges(ctx: Ctx, g: Geo, order: number[], active: Racer[]) {
+  const spr = g.bandHalf - g.size * 0.5;
+  ctx.save();
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  for (let i = 0; i < Math.min(3, order.length); i++) {
+    const r = active[order[i]];
+    const p = pathPoint(g, uOf(r));
+    const mx = p.x + p.nx * r.laneN * spr;
+    const my = p.y + p.ny * r.laneN * spr;
+    const mr = g.size * r.scale * 0.5;
+    const br = g.size * 0.22;
+    const by = my - mr - br * 1.1;
+    ctx.beginPath();
+    ctx.arc(mx, by, br, 0, Math.PI * 2);
+    ctx.fillStyle = MEDAL[i];
+    ctx.fill();
+    ctx.lineWidth = 1.5 * g.dpr;
+    ctx.strokeStyle = MEDAL_RING[i];
+    ctx.stroke();
+    ctx.fillStyle = "#1a1205";
+    ctx.font = `800 ${br * 1.15}px ${FONT}`;
+    ctx.fillText(String(i + 1), mx, by + g.dpr);
+  }
+  ctx.restore();
+}
+
+// Live top-5 standings board, anchored TOP-LEFT (under the lap counter) so the
+// centre of the track stays clear for the stage centrepiece.
+function drawLeaderboard(ctx: Ctx, g: Geo, order: number[], active: Racer[], sprites: HTMLCanvasElement[], lap: number, total: number) {
+  const n = Math.min(5, order.length);
+  if (n === 0) return;
+  const rowH = Math.min(g.W, g.H) * 0.04; // compact - tucks into the corner
+  const headerH = rowH * 0.95;
+  const pad = rowH * 0.32;
+  ctx.font = `600 ${rowH * 0.42}px ${FONT}`;
+  let nameW = 0;
+  for (let i = 0; i < n; i++) nameW = Math.max(nameW, ctx.measureText(COUNTRIES[active[order[i]].ci].name).width);
+  const pw = Math.min(g.W * 0.38, rowH * 1.7 + nameW + pad * 1.5);
+  const ph = headerH + n * rowH + pad;
+  const px = 10 * g.dpr;
+  const py = 10 * g.dpr; // top-left corner (replaces the standalone lap pill)
+  ctx.save();
+  ctx.fillStyle = "rgba(10,12,16,0.5)";
+  ctx.beginPath();
+  ctx.roundRect(px, py, pw, ph, rowH * 0.3);
+  ctx.fill();
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "left";
+  ctx.fillStyle = "rgba(255,255,255,0.8)";
+  ctx.font = `800 ${headerH * 0.44}px ${FONT}`;
+  ctx.fillText(`LAP ${lap} / ${total}`, px + pad, py + headerH * 0.58);
+  for (let i = 0; i < n; i++) {
+    const r = active[order[i]];
+    const c = COUNTRIES[r.ci];
+    const ry = py + headerH + i * rowH + rowH / 2;
+    ctx.textAlign = "center";
+    ctx.fillStyle = i < 3 ? MEDAL[i] : "rgba(255,255,255,0.7)";
+    ctx.font = `800 ${rowH * 0.42}px ${FONT}`;
+    ctx.fillText(String(i + 1), px + pad + rowH * 0.35, ry);
+    const fr = rowH * 0.32;
+    const sprite = sprites[r.ci];
+    if (sprite && sprite.width > 1) ctx.drawImage(sprite, px + pad + rowH * 0.75, ry - fr, fr * 2, fr * 2);
+    ctx.textAlign = "left";
+    ctx.fillStyle = "#fff";
+    ctx.font = `600 ${rowH * 0.4}px ${FONT}`;
+    const nameX = px + pad + rowH * 1.6;
+    const maxW = pw - (nameX - px) - pad;
+    let name = c.name;
+    if (ctx.measureText(name).width > maxW) {
+      while (name.length > 3 && ctx.measureText(name + "…").width > maxW) name = name.slice(0, -1);
+      name += "…";
+    }
+    ctx.fillText(name, nameX, ry);
+  }
+  ctx.textBaseline = "alphabetic";
+  ctx.restore();
+}
+
 function drawCountdown(ctx: Ctx, g: Geo, countdown: number, goFlash: number) {
   const cx = g.hole.x + g.hole.w / 2;
   const cy = g.hole.y + g.hole.h / 2;
@@ -789,7 +899,7 @@ function Confetti() {
       {pieces.map((p, i) => (
         <span
           key={i}
-          className="confetti-piece absolute top-[-6%] block rounded-sm"
+          className="confetti-piece absolute top-[-6%] block rounded-full"
           style={{
             left: `${p.left}%`,
             width: p.size,
@@ -813,8 +923,11 @@ export default function Race() {
   // the latest values without being re-created on every change.
   const [round, setRound] = useState(3);
   const [stageIndex, setStageIndex] = useState(0);
-  const settings = useRef({ round: 3, stage: 0 });
-  settings.current = { round, stage: stageIndex };
+  const [showLive, setShowLive] = useState(true); // live top-5 board
+  const [autoPlay, setAutoPlay] = useState(false); // loop random races hands-free
+  const [confirmReset, setConfirmReset] = useState(false);
+  const settings = useRef({ round: 3, stage: 0, showLive: true, autoPlay: false });
+  settings.current = { round, stage: stageIndex, showLive, autoPlay };
   const renderRef = useRef<MarbleRender[]>([]);
   const state = useRef<{
     sprites: HTMLCanvasElement[];
@@ -832,7 +945,9 @@ export default function Race() {
     raf: number;
     last: number;
     ended: boolean;
-  }>({ sprites: [], stage: STAGES[0], active: [], finishers: [], obstacles: [], obTimer: 0, laps: 3, finishDist: TRACK_LEN * 3, countdown: 3, goFlash: 0, lastCount: 4, elapsed: 0, raf: 0, last: 0, ended: false });
+    podiumIn: number; // seconds left before the podium shows (-1 = race not decided yet)
+    showLive: boolean; // draw the live top-5 board
+  }>({ sprites: [], stage: STAGES[0], active: [], finishers: [], obstacles: [], obTimer: 0, laps: 3, finishDist: TRACK_LEN * 3, countdown: 3, goFlash: 0, lastCount: 4, elapsed: 0, raf: 0, last: 0, ended: false, podiumIn: -1, showLive: true });
 
   useEffect(() => {
     let alive = true;
@@ -858,7 +973,12 @@ export default function Race() {
 
   const startRace = useCallback(() => {
     const s = state.current;
-    s.stage = STAGES[settings.current.stage] ?? STAGES[0];
+    // Auto-play picks a fresh random stage each race so the loop stays varied.
+    const stageIdx = settings.current.autoPlay
+      ? Math.floor(Math.random() * STAGES.length)
+      : settings.current.stage;
+    s.stage = STAGES[stageIdx] ?? STAGES[0];
+    setStageIndex(stageIdx);
     s.laps = Math.max(1, settings.current.round); // rounds = laps to race
     s.finishDist = TRACK_LEN * s.laps;
     // pick 10 distinct random countries
@@ -905,6 +1025,8 @@ export default function Race() {
     s.lastCount = 4;
     s.elapsed = 0;
     s.ended = false;
+    s.podiumIn = -1;
+    s.showLive = settings.current.showLive;
     s.last = 0;
     sound.bugle(); // "call to post"
     setPodium([]);
@@ -946,6 +1068,7 @@ export default function Race() {
           if (st.countdown <= 0) {
             st.goFlash = 0.8;
             sound.go(); // GO!
+            sound.music(st.stage.song); // theme kicks in once the race starts
           }
         } else {
           st.goFlash = Math.max(0, st.goFlash - dt);
@@ -1005,15 +1128,23 @@ export default function Race() {
               st.finishers.push(r.ci);
             }
           }
-          if (st.finishers.length >= NEED) {
-            st.ended = true;
+          if (st.finishers.length >= NEED && st.podiumIn < 0) {
+            // Race is decided - keep the scene rolling for a moment before the podium.
+            st.podiumIn = 3;
             const top = st.finishers.slice(0, NEED).map((ci, idx) => ({ country: COUNTRIES[ci], place: idx + 1 }));
             setPodium(top);
             setAnnounce(
               `Race finished. Gold ${top[0].country.name}, silver ${top[1].country.name}, bronze ${top[2].country.name}.`,
             );
-            sound.win();
-            setPhase("done");
+          }
+          if (st.podiumIn >= 0) {
+            st.podiumIn -= dt;
+            if (st.podiumIn <= 0) {
+              st.ended = true;
+              sound.stopMusic(); // swap the stage loop for a celebration theme
+              sound.celebrate();
+              setPhase("done"); // reveal the Winners screen after the 3s wait
+            }
           }
         }
       }
@@ -1024,11 +1155,21 @@ export default function Race() {
       drawTrack(ctx, g); // rounded road ring on top of the field
       drawObstacles(ctx, g, st.obstacles);
       drawFinish(ctx, g);
-      // Live lap counter from the leader's distance.
+      // Current lap from the leader's distance.
       let lead = 0;
       for (const r of st.active) if (r.dist > lead) lead = r.dist;
       const lap = Math.min(st.laps, Math.floor(lead / TRACK_LEN) + 1);
-      drawLaps(ctx, g, lap, st.laps);
+
+      // Top-left HUD: the live board (with the lap as its header) when enabled,
+      // otherwise just the compact lap pill. Plus 1/2/3 badges over the leaders.
+      if (st.countdown <= 0) {
+        const order = standings(st.active);
+        drawRankBadges(ctx, g, order, st.active);
+        if (st.showLive) drawLeaderboard(ctx, g, order, st.active, st.sprites, lap, st.laps);
+        else drawLaps(ctx, g, lap, st.laps);
+      } else {
+        drawLaps(ctx, g, lap, st.laps);
+      }
 
       // Feed marble positions to the 3D overlay (CSS pixels + travel direction).
       const spr = g.bandHalf - g.size * 0.5;
@@ -1064,6 +1205,19 @@ export default function Race() {
     };
   }, [phase, startRace]);
 
+  // Silence the themed loop on the setup screen (it restarts when a race begins).
+  useEffect(() => {
+    if (phase === "setup" || phase === "loading") sound.stopMusic();
+  }, [phase]);
+
+  // Auto-play: once the podium shows, roll straight into the next (random) race
+  // after a short beat - so it loops hands-free if you walk away.
+  useEffect(() => {
+    if (phase !== "done" || !settings.current.autoPlay) return;
+    const id = setTimeout(() => startRace(), 4500);
+    return () => clearTimeout(id);
+  }, [phase, startRace]);
+
   // Browsers block audio until the first interaction - unlock on any tap/key.
   useEffect(() => {
     const unlock = () => sound.unlock();
@@ -1094,6 +1248,46 @@ export default function Race() {
       </p>
 
       <SoundToggle />
+
+      {phase === "racing" && (
+        <button
+          onClick={() => setConfirmReset(true)}
+          className="absolute right-3 top-3 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-sm transition hover:bg-black/65 active:scale-90"
+          aria-label="Reset race"
+          title="Reset race"
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+            <path d="M3 3v5h5" />
+          </svg>
+        </button>
+      )}
+
+      {confirmReset && (
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/70 px-6 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-3xl bg-[#15181f] p-7 text-center ring-1 ring-white/10">
+            <h2 className="text-2xl font-bold text-white">Reset the race?</h2>
+            <p className="mt-2 text-white/60">This ends the current race and returns to setup.</p>
+            <div className="mt-6 flex justify-center gap-3">
+              <button
+                onClick={() => {
+                  setConfirmReset(false);
+                  setPhase("setup");
+                }}
+                className="rounded-full bg-white px-8 py-3 text-lg font-bold text-black transition hover:scale-105 active:scale-95"
+              >
+                Reset
+              </button>
+              <button
+                onClick={() => setConfirmReset(false)}
+                className="rounded-full border-2 border-white/30 px-8 py-3 text-lg font-bold text-white transition hover:bg-white/10 active:scale-95"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {phase === "loading" && (
         <div className="absolute inset-0 flex items-center justify-center text-white/70">
@@ -1145,6 +1339,31 @@ export default function Race() {
             </div>
           </div>
 
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            <button
+              onClick={() => setShowLive((v) => !v)}
+              className="flex items-center gap-3 rounded-full bg-white/5 px-5 py-2.5 ring-1 ring-white/15 transition hover:bg-white/10"
+              role="switch"
+              aria-checked={showLive}
+            >
+              <span className="text-base font-semibold text-white/80">Show live results</span>
+              <span className={`relative h-6 w-11 rounded-full transition ${showLive ? "bg-emerald-500" : "bg-white/25"}`}>
+                <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all ${showLive ? "left-[22px]" : "left-0.5"}`} />
+              </span>
+            </button>
+            <button
+              onClick={() => setAutoPlay((v) => !v)}
+              className="flex items-center gap-3 rounded-full bg-white/5 px-5 py-2.5 ring-1 ring-white/15 transition hover:bg-white/10"
+              role="switch"
+              aria-checked={autoPlay}
+            >
+              <span className="text-base font-semibold text-white/80">Auto play (random)</span>
+              <span className={`relative h-6 w-11 rounded-full transition ${autoPlay ? "bg-emerald-500" : "bg-white/25"}`}>
+                <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all ${autoPlay ? "left-[22px]" : "left-0.5"}`} />
+              </span>
+            </button>
+          </div>
+
           <button
             onClick={startRace}
             className="rounded-full bg-white px-12 py-4 text-xl font-extrabold text-black transition hover:scale-105 active:scale-95"
@@ -1165,12 +1384,15 @@ export default function Race() {
               const px = w.place === 1 ? 168 : 104;
               const lift = w.place === 1 ? "mb-8" : "";
               return (
-                <div key={w.country.code} className={`flex flex-col items-center ${lift}`}>
-                  <div className="mb-2 text-5xl sm:text-6xl">{medal}</div>
+                <div key={w.country.code} className={`relative flex flex-col items-center ${lift}`} style={{ width: px }}>
+                  <div className="relative z-10 mb-1 text-5xl sm:text-6xl">{medal}</div>
                   <div style={{ width: px, height: px }} className="drop-shadow-[0_12px_30px_rgba(0,0,0,0.6)]">
                     <PodiumMarble3D code={w.country.code} hue={w.country.hue} />
                   </div>
-                  <p className="mt-3 text-lg font-bold sm:text-2xl">{w.country.name}</p>
+                  {/* Absolute so a long name never widens the column and shifts the podium off-centre. */}
+                  <p className="absolute left-1/2 top-full mt-2 -translate-x-1/2 whitespace-nowrap text-lg font-bold sm:text-2xl">
+                    {w.country.name}
+                  </p>
                 </div>
               );
             })}
