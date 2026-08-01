@@ -58,9 +58,23 @@ body {
     transform: translateY(0) rotate(0deg);
     opacity: 1;
   }
+  80% {
+    opacity: 1;
+  }
   100% {
     transform: translateY(110vh) rotate(680deg);
-    opacity: 0.9;
+    opacity: 0;
+  }
+}
+
+/* The whole confetti burst eases out after the ~5s drop, so the podium clears. */
+@keyframes confetti-out {
+  0%,
+  75% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
   }
 }
 

@@ -887,15 +887,19 @@ function Confetti() {
     () =>
       Array.from({ length: 70 }, (_, i) => ({
         left: (i * 61) % 100,
-        delay: (i % 16) * 0.16,
+        delay: (i % 10) * 0.13,
         hue: (i * 47) % 360,
-        dur: 2 + (i % 6) * 0.4,
+        dur: 2.6 + (i % 5) * 0.28,
         size: 7 + (i % 4) * 3,
       })),
     [],
   );
   return (
-    <div className="pointer-events-none absolute inset-0 overflow-hidden">
+    // Drops once over ~5s, then the whole burst fades out (no infinite loop).
+    <div
+      className="pointer-events-none absolute inset-0 overflow-hidden"
+      style={{ animation: "confetti-out 5.4s forwards" }}
+    >
       {pieces.map((p, i) => (
         <span
           key={i}
@@ -905,7 +909,7 @@ function Confetti() {
             width: p.size,
             height: p.size,
             background: `hsl(${p.hue}, 90%, 60%)`,
-            animation: `confetti-fall ${p.dur}s ${p.delay}s cubic-bezier(0.3,0.1,0.3,1) infinite`,
+            animation: `confetti-fall ${p.dur}s ${p.delay}s cubic-bezier(0.3,0.1,0.3,1) forwards`,
           }}
         />
       ))}
