@@ -1397,7 +1397,7 @@ export default function Race() {
               );
             })}
           </div>
-          <div className="mt-12 flex flex-wrap items-center justify-center gap-3">
+          <div className="mt-24 flex flex-wrap items-center justify-center gap-3">
             <button
               onClick={startRace}
               className="rounded-full bg-white px-10 py-3.5 text-lg font-bold text-black transition hover:scale-105 active:scale-95"
