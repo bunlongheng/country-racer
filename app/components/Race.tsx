@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { COUNTRIES, type Country } from "../data/countries";
-import { FINISH, TRACK_LEN, stepRacer } from "@/lib/race";
+import { TRACK_LEN, stepRacer } from "@/lib/race";
 import { sound } from "@/lib/sound";
 import SoundToggle from "./SoundToggle";
 import type { MarbleRender } from "./RaceMarbles";
@@ -15,7 +15,10 @@ const RaceMarbles = dynamic(() => import("./RaceMarbles"), { ssr: false });
 const SPRITE = 96; // baked marble sprite resolution (px)
 const RACERS = 10; // fixed field - ten marbles, no more
 const NEED = 3; // finishers needed to end the race
-const OBSTACLES = 16; // obstacles scattered on the track
+const OB_SEED = 6; // obstacles present when the race starts
+const OB_MAX = 18; // never more than this many alive at once
+const OB_SPAWN_EVERY = 1; // seconds between spawn ticks
+const OB_SPAWN_COUNT = 2; // obstacles that pop in each tick
 const FONT = "system-ui, -apple-system, 'Segoe UI', sans-serif";
 
 type Racer = {
@@ -41,7 +44,31 @@ type Winner = { country: Country; place: number };
 // `good` = green flash (helps you); otherwise a red flash (hurts you).
 type ObType = "boost" | "mud" | "tar" | "banana" | "shrink" | "grow";
 type ObShape = "bolt" | "droplet" | "skull" | "banana" | "up" | "down";
-type Obstacle = { u: number; laneN: number; type: ObType; lit: number };
+type Obstacle = { u: number; laneN: number; type: ObType; lit: number; life: number; maxLife: number };
+
+// A fresh obstacle at a random spot / lane / type, with a random lifetime so the
+// field is never the same twice and marbles keep appearing and fading out.
+function spawnObstacle(): Obstacle {
+  const maxLife = 4 + Math.random() * 3.5; // lives 4 - 7.5s
+  return {
+    u: Math.random(),
+    laneN: (Math.random() * 2 - 1) * 0.8,
+    type: OB_TYPES[Math.floor(Math.random() * OB_TYPES.length)],
+    lit: 0,
+    life: maxLife,
+    maxLife,
+  };
+}
+
+// Pop-in / pop-out envelope (0..1) for size + opacity, driven by lifetime.
+function obGrow(ob: Obstacle): number {
+  const IN = 0.28; // grow-in time
+  const OUT = 0.6; // fade-out time
+  const age = ob.maxLife - ob.life;
+  if (age < IN) return age / IN;
+  if (ob.life < OUT) return Math.max(0, ob.life / OUT);
+  return 1;
+}
 const OB: Record<ObType, { shape: ObShape; good: boolean; mul?: number; time?: number; scale?: number }> = {
   boost: { shape: "bolt", good: true, mul: 1.8, time: 1.2 }, // speed up
   mud: { shape: "droplet", good: false, mul: 0.55, time: 1.3 }, // slow
@@ -52,22 +79,18 @@ const OB: Record<ObType, { shape: ObShape; good: boolean; mul?: number; time?: n
 };
 const OB_TYPES: ObType[] = ["boost", "mud", "tar", "banana", "shrink", "grow"];
 
-type Theme = {
+// A stage = the whole look of the track: outer background, running surface,
+// infield fill, line colours, and a painter that decorates the centre infield.
+type Stage = {
   name: string;
-  bg: string;
-  track: string;
-  line: string;
-  dashed: boolean;
-  edge: string;
-  decor: "stars" | "trees" | "dots" | "none";
-  decorColor: string;
+  bg: string; // outer background
+  road: string; // running surface the marbles roll on
+  infield: string; // centre fill
+  line: string; // dashed centre-line colour
+  edge: string; // road edge line colour
+  decor: (ctx: CanvasRenderingContext2D, g: Geo) => void; // themed infield art
 };
-const THEMES: Theme[] = [
-  { name: "Night", bg: "#04050a", track: "#191c26", line: "rgba(255,255,255,0.5)", dashed: true, edge: "rgba(255,255,255,0.18)", decor: "stars", decorColor: "rgba(255,255,255,0.8)" },
-  { name: "Grass", bg: "#08160d", track: "#2b2f38", line: "rgba(255,255,255,0.5)", dashed: true, edge: "rgba(255,255,255,0.16)", decor: "trees", decorColor: "#2e8b45" },
-  { name: "Neon", bg: "#070512", track: "#151129", line: "rgba(120,225,255,0.7)", dashed: false, edge: "rgba(140,90,255,0.6)", decor: "dots", decorColor: "rgba(120,225,255,0.5)" },
-  { name: "Desert", bg: "#170f04", track: "#332d22", line: "rgba(255,238,200,0.45)", dashed: true, edge: "rgba(255,255,255,0.14)", decor: "none", decorColor: "rgba(0,0,0,0)" },
-];
+// STAGES are defined lower down, next to the drawing helpers they use.
 
 function bakeMarble(img: HTMLImageElement): HTMLCanvasElement {
   const c = document.createElement("canvas");
@@ -105,10 +128,10 @@ type Geo = {
   segs: Seg[];
   cl: { L: number; T: number; R: number; B: number; r: number };
   hole: { x: number; y: number; w: number; h: number };
-  theme: Theme;
+  stage: Stage;
 };
 
-function buildGeo(W: number, H: number, dpr: number, theme: Theme): Geo {
+function buildGeo(W: number, H: number, dpr: number, stage: Stage): Geo {
   const m = Math.min(W, H);
   const inset = m * 0.016;
   const band = m * 0.4; // big road
@@ -118,7 +141,10 @@ function buildGeo(W: number, H: number, dpr: number, theme: Theme): Geo {
   const T = inset + bandHalf;
   const R = W - inset - bandHalf;
   const B = H - inset - bandHalf;
-  const r = Math.min(R - L, B - T) * 0.16;
+  // Corner radius = half the shorter side, so the track is a proper oval with
+  // fully rounded ends. This keeps the inner edge radius (r - bandHalf) well
+  // above zero, so the infield "hole" is a smooth curve, never a square corner.
+  const r = Math.min(R - L, B - T) * 0.5;
   const cx = (L + R) / 2;
 
   const straight = (x0: number, y0: number, x1: number, y1: number, nx: number, ny: number): Seg => ({
@@ -146,7 +172,7 @@ function buildGeo(W: number, H: number, dpr: number, theme: Theme): Geo {
   ];
   const perim = segs.reduce((sum, seg) => sum + seg.len, 0);
   const hole = { x: L + bandHalf, y: T + bandHalf, w: R - L - band, h: B - T - band };
-  return { W, H, dpr, size, bandHalf, perim, segs, cl: { L, T, R, B, r }, hole, theme };
+  return { W, H, dpr, size, bandHalf, perim, segs, cl: { L, T, R, B, r }, hole, stage };
 }
 
 function pathPoint(geo: Geo, u: number) {
@@ -166,38 +192,57 @@ function crossed(u0: number, u1: number, uF: number): boolean {
   return u1 >= u0 ? uF > u0 && uF <= u1 : uF > u0 || uF <= u1;
 }
 
-// Full 2D anti-overlap using each marble's actual (scaled) radius.
+// Anti-overlap in REAL screen space. Working in flat (along-track, lane) space
+// fails on the tight oval bends, because equal lane spacing maps to much smaller
+// real distances on the inside of a curve - so marbles that look separated in u
+// still visibly stack. Here each pair is pushed apart by its true (x,y) distance,
+// then the push is split back into along-track (uAdj) and lateral (laneN) parts
+// via the local track frame, so it stays correct everywhere on the track.
+type Frame = { x: number; y: number; tx: number; ty: number; nx: number; ny: number };
 function separate(active: Racer[], g: Geo) {
   const spread = g.bandHalf - g.size * 0.5;
   if (spread <= 0) return;
-  for (const r of active) r.uAdj *= 0.9;
-  for (let iter = 0; iter < 6; iter++) {
+  for (const r of active) r.uAdj *= 0.97;
+  const fr: Frame[] = new Array(active.length);
+  for (let iter = 0; iter < 20; iter++) {
+    // refresh each marble's real position + local tangent/normal
+    for (let k = 0; k < active.length; k++) {
+      const r = active[k];
+      const u = uOf(r);
+      const p = pathPoint(g, u);
+      const p2 = pathPoint(g, u + 0.002);
+      let tx = p2.x - p.x;
+      let ty = p2.y - p.y;
+      const tl = Math.hypot(tx, ty) || 1;
+      tx /= tl;
+      ty /= tl;
+      fr[k] = { x: p.x + p.nx * r.laneN * spread, y: p.y + p.ny * r.laneN * spread, tx, ty, nx: p.nx, ny: p.ny };
+    }
     for (let i = 0; i < active.length; i++) {
       for (let j = i + 1; j < active.length; j++) {
-        const minD = (g.size * active[i].scale * 0.5 + g.size * active[j].scale * 0.5) * 1.04;
-        let da = (uOf(active[i]) - uOf(active[j])) * g.perim;
-        if (da > g.perim / 2) da -= g.perim;
-        else if (da < -g.perim / 2) da += g.perim;
-        const dq = (active[i].laneN - active[j].laneN) * spread;
-        const d2 = da * da + dq * dq;
-        if (d2 >= minD * minD) continue;
-        let d = Math.sqrt(d2);
-        let nx: number;
-        let ny: number;
+        const minD = (g.size * active[i].scale * 0.5 + g.size * active[j].scale * 0.5) * 1.06;
+        let dx = fr[i].x - fr[j].x;
+        let dy = fr[i].y - fr[j].y;
+        let d = Math.hypot(dx, dy);
+        if (d >= minD) continue;
         if (d < 1e-4) {
-          const ang = (i * 2.4) % (Math.PI * 2);
-          nx = Math.cos(ang);
-          ny = Math.sin(ang);
-          d = 0;
-        } else {
-          nx = da / d;
-          ny = dq / d;
+          const a = (i * 2.4) % (Math.PI * 2);
+          dx = Math.cos(a);
+          dy = Math.sin(a);
+          d = 1;
         }
+        const ux = dx / d;
+        const uy = dy / d;
         const push = (minD - d) / 2;
-        active[i].uAdj += (nx * push) / g.perim;
-        active[j].uAdj -= (nx * push) / g.perim;
-        active[i].laneN = Math.max(-1, Math.min(1, active[i].laneN + (ny * push) / spread));
-        active[j].laneN = Math.max(-1, Math.min(1, active[j].laneN - (ny * push) / spread));
+        // decompose the real-space push into along-track + lateral for each marble
+        const ai = ux * fr[i].tx + uy * fr[i].ty;
+        const li = ux * fr[i].nx + uy * fr[i].ny;
+        active[i].uAdj += (ai * push) / g.perim;
+        active[i].laneN = Math.max(-1, Math.min(1, active[i].laneN + (li * push) / spread));
+        const aj = ux * fr[j].tx + uy * fr[j].ty;
+        const lj = ux * fr[j].nx + uy * fr[j].ny;
+        active[j].uAdj -= (aj * push) / g.perim;
+        active[j].laneN = Math.max(-1, Math.min(1, active[j].laneN - (lj * push) / spread));
       }
     }
   }
@@ -205,13 +250,9 @@ function separate(active: Racer[], g: Geo) {
 
 type Ctx = CanvasRenderingContext2D;
 
-// Neutral, all-gray look so the colourful country marbles are the only pop.
-const BG = "#0f1116";
-const INFIELD = "#2c2f36"; // darker gray centre (distinct from the road, not black)
-const ROAD = "#565a64"; // lighter gray racing surface
-
 function drawScenery(ctx: Ctx, g: Geo) {
-  ctx.fillStyle = BG;
+  // The whole map IS the field: fill the entire canvas with the stage surface.
+  ctx.fillStyle = g.stage.infield;
   ctx.fillRect(0, 0, g.W, g.H);
 }
 
@@ -224,22 +265,11 @@ function drawTrack(ctx: Ctx, g: Geo) {
   ctx.save();
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
-  // infield fill: the whole track area including the centre, so there is no
-  // black dead space in the middle - it reads as a gray racetrack infield.
-  ctx.beginPath();
-  ctx.roundRect(
-    g.cl.L - g.bandHalf,
-    g.cl.T - g.bandHalf,
-    g.cl.R - g.cl.L + g.bandHalf * 2,
-    g.cl.B - g.cl.T + g.bandHalf * 2,
-    g.cl.r + g.bandHalf,
-  );
-  ctx.fillStyle = INFIELD;
-  ctx.fill();
-  // the lighter gray road band (the racing surface stands out from the infield)
+  // The field already fills the whole canvas; just lay the rounded road ring on
+  // top of it, so the only curves on screen are the track's (no boxy infield).
   trackPath(ctx, g);
   ctx.lineWidth = g.bandHalf * 2;
-  ctx.strokeStyle = ROAD;
+  ctx.strokeStyle = g.stage.road;
   ctx.stroke();
   // crisp edge lines at the inner + outer road boundaries = clear separation
   const edge = (inset: number) => {
@@ -249,23 +279,332 @@ function drawTrack(ctx: Ctx, g: Geo) {
       g.cl.T + inset,
       g.cl.R - g.cl.L - inset * 2,
       g.cl.B - g.cl.T - inset * 2,
-      Math.max(1, g.cl.r + inset),
+      Math.max(1, g.cl.r - inset),
     );
     ctx.lineWidth = 2 * g.dpr;
-    ctx.strokeStyle = "rgba(255,255,255,0.5)";
+    ctx.strokeStyle = g.stage.edge;
     ctx.stroke();
   };
   edge(-g.bandHalf); // outer edge
   edge(g.bandHalf); // inner edge
-  // very dim dashed racing line down the middle of the road
+  // dim dashed racing line down the middle of the road
   trackPath(ctx, g);
   ctx.lineWidth = 1.5 * g.dpr;
   ctx.setLineDash([9 * g.dpr, 13 * g.dpr]);
-  ctx.strokeStyle = "rgba(255,255,255,0.1)";
+  ctx.strokeStyle = g.stage.line;
   ctx.stroke();
   ctx.setLineDash([]);
   ctx.restore();
 }
+
+// Paint the stage's themed art into the centre infield (clipped so it never
+// spills onto the road) plus any corner props the decorator draws itself.
+function drawInfield(ctx: Ctx, g: Geo) {
+  g.stage.decor(ctx, g);
+}
+
+// --- Stage decorators -------------------------------------------------------
+// Each paints the ENTIRE canvas as the field (edge to edge). Surface treatments
+// (grass stripes, water, markings) span the whole map; small props sit in the
+// open centre so they are not hidden under the track ring drawn on top.
+
+// Horizontal mowing stripes across the whole map.
+function mowStripes(ctx: Ctx, g: Geo, a: string, b: string, n: number) {
+  const sh = g.H / n;
+  for (let i = 0; i < n; i++) {
+    ctx.fillStyle = i % 2 ? a : b;
+    ctx.fillRect(0, i * sh, g.W, sh + 1);
+  }
+}
+
+function stageHorse(ctx: Ctx, g: Geo) {
+  // darker grass tufts scattered across the whole field
+  ctx.save();
+  ctx.fillStyle = "rgba(0,0,0,0.10)";
+  for (let i = 0; i < 200; i++) {
+    const x = (((i * 97) % 100) / 100) * g.W;
+    const y = (((i * 53) % 100) / 100) * g.H;
+    ctx.fillRect(x, y, g.dpr * 3, g.dpr * 6);
+  }
+  ctx.restore();
+}
+
+function stageSoccer(ctx: Ctx, g: Geo) {
+  mowStripes(ctx, g, "rgba(255,255,255,0.05)", "rgba(0,0,0,0.05)", 10);
+  const cx = g.W / 2, cy = g.H / 2;
+  const m = Math.min(g.W, g.H) * 0.04;
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,0.7)";
+  ctx.lineWidth = 3 * g.dpr;
+  ctx.strokeRect(m, m, g.W - m * 2, g.H - m * 2); // pitch boundary
+  ctx.beginPath(); // halfway line
+  ctx.moveTo(m, cy);
+  ctx.lineTo(g.W - m, cy);
+  ctx.stroke();
+  ctx.beginPath(); // centre circle
+  ctx.arc(cx, cy, Math.min(g.W, g.H) * 0.13, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.fillStyle = "rgba(255,255,255,0.85)"; // centre spot
+  ctx.beginPath();
+  ctx.arc(cx, cy, 4 * g.dpr, 0, Math.PI * 2);
+  ctx.fill();
+  const gw = g.W * 0.22, gh = Math.min(g.W, g.H) * 0.07; // goal boxes
+  ctx.strokeRect(cx - gw / 2, m, gw, gh);
+  ctx.strokeRect(cx - gw / 2, g.H - m - gh, gw, gh);
+  ctx.restore();
+}
+
+function stageFootball(ctx: Ctx, g: Geo) {
+  const m = Math.min(g.W, g.H) * 0.05;
+  const ez = g.W * 0.09; // end zones
+  ctx.save();
+  ctx.fillStyle = "rgba(40,90,200,0.5)";
+  ctx.fillRect(0, 0, ez, g.H);
+  ctx.fillStyle = "rgba(200,50,50,0.5)";
+  ctx.fillRect(g.W - ez, 0, ez, g.H);
+  ctx.strokeStyle = "rgba(255,255,255,0.6)";
+  ctx.lineWidth = 2 * g.dpr;
+  const lines = 10; // yard lines
+  for (let i = 0; i <= lines; i++) {
+    const x = ez + (i / lines) * (g.W - ez * 2);
+    ctx.beginPath();
+    ctx.moveTo(x, m);
+    ctx.lineTo(x, g.H - m);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function stageStadium(ctx: Ctx, g: Geo) {
+  mowStripes(ctx, g, "rgba(255,255,255,0.04)", "rgba(0,0,0,0.06)", 9);
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,0.55)";
+  ctx.lineWidth = 3 * g.dpr;
+  ctx.beginPath();
+  ctx.arc(g.W / 2, g.H / 2, Math.min(g.W, g.H) * 0.13, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+  // floodlight towers at the four corners with a warm glow
+  const lamp = (x: number, y: number) => {
+    const r = g.bandHalf * 0.55;
+    const glow = ctx.createRadialGradient(x, y, r * 0.2, x, y, r * 3);
+    glow.addColorStop(0, "rgba(255,244,190,0.5)");
+    glow.addColorStop(1, "rgba(255,244,190,0)");
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(x, y, r * 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#f6efc4";
+    ctx.beginPath();
+    ctx.arc(x, y, r * 0.5, 0, Math.PI * 2);
+    ctx.fill();
+  };
+  const m = g.bandHalf * 0.7;
+  lamp(m, m);
+  lamp(g.W - m, m);
+  lamp(m, g.H - m);
+  lamp(g.W - m, g.H - m);
+}
+
+function stageAirport(ctx: Ctx, g: Geo) {
+  const cx = g.W / 2;
+  const rw = g.W * 0.2; // runway strip, full height
+  ctx.save();
+  ctx.fillStyle = "rgba(0,0,0,0.32)";
+  ctx.fillRect(cx - rw / 2, 0, rw, g.H);
+  ctx.fillStyle = "rgba(255,255,255,0.8)"; // threshold bars
+  for (let i = -2; i <= 2; i++) {
+    ctx.fillRect(cx + i * rw * 0.14, g.H * 0.05, rw * 0.05, g.H * 0.04);
+    ctx.fillRect(cx + i * rw * 0.14, g.H * 0.91, rw * 0.05, g.H * 0.04);
+  }
+  ctx.strokeStyle = "rgba(255,235,120,0.9)"; // dashed centreline
+  ctx.lineWidth = 3 * g.dpr;
+  ctx.setLineDash([g.H * 0.05, g.H * 0.04]);
+  ctx.beginPath();
+  ctx.moveTo(cx, g.H * 0.12);
+  ctx.lineTo(cx, g.H * 0.88);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  // plane silhouette parked in the centre
+  const py = g.H / 2, s = Math.min(g.W, g.H) * 0.1;
+  ctx.fillStyle = "rgba(230,236,245,0.9)";
+  ctx.beginPath();
+  ctx.ellipse(cx, py, s * 0.16, s, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(cx - s * 0.9, py + s * 0.1);
+  ctx.lineTo(cx + s * 0.9, py + s * 0.1);
+  ctx.lineTo(cx + s * 0.12, py + s * 0.35);
+  ctx.lineTo(cx - s * 0.12, py + s * 0.35);
+  ctx.closePath();
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(cx - s * 0.35, py - s * 0.8);
+  ctx.lineTo(cx + s * 0.35, py - s * 0.8);
+  ctx.lineTo(cx + s * 0.06, py - s * 0.5);
+  ctx.lineTo(cx - s * 0.06, py - s * 0.5);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+function stageRiver(ctx: Ctx, g: Geo) {
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,0.16)"; // wavy water across the whole map
+  ctx.lineWidth = 2 * g.dpr;
+  const rows = 16;
+  for (let r = 1; r < rows; r++) {
+    const y = (r / rows) * g.H;
+    ctx.beginPath();
+    for (let x = 0; x <= g.W; x += 10 * g.dpr) {
+      const yy = y + Math.sin((x / g.W) * Math.PI * 8 + r) * g.H * 0.008;
+      if (x === 0) ctx.moveTo(x, yy);
+      else ctx.lineTo(x, yy);
+    }
+    ctx.stroke();
+  }
+  const bank = Math.min(g.W, g.H) * 0.05; // grassy banks along top + bottom
+  ctx.fillStyle = "rgba(52,140,70,0.85)";
+  ctx.fillRect(0, 0, g.W, bank);
+  ctx.fillRect(0, g.H - bank, g.W, bank);
+  // little sail boat in the centre
+  const bx = g.W / 2, by = g.H / 2, s = Math.min(g.W, g.H) * 0.09;
+  ctx.fillStyle = "#8a5a30";
+  ctx.beginPath();
+  ctx.moveTo(bx - s, by);
+  ctx.lineTo(bx + s, by);
+  ctx.lineTo(bx + s * 0.6, by + s * 0.4);
+  ctx.lineTo(bx - s * 0.6, by + s * 0.4);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = "#f4f4f4";
+  ctx.beginPath();
+  ctx.moveTo(bx, by - s * 1.3);
+  ctx.lineTo(bx, by - s * 0.05);
+  ctx.lineTo(bx + s * 0.75, by - s * 0.05);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+function stageBeach(ctx: Ctx, g: Geo) {
+  ctx.save();
+  const sea = g.H * 0.22; // ocean strip along the top of the whole map
+  ctx.fillStyle = "rgba(30,140,175,0.9)";
+  ctx.fillRect(0, 0, g.W, sea);
+  ctx.strokeStyle = "rgba(255,255,255,0.35)";
+  ctx.lineWidth = 2 * g.dpr;
+  for (let r = 1; r < 4; r++) {
+    const y = (r / 4) * sea;
+    ctx.beginPath();
+    for (let x = 0; x <= g.W; x += 10 * g.dpr) {
+      const yy = y + Math.sin((x / g.W) * Math.PI * 7 + r) * 3 * g.dpr;
+      if (x === 0) ctx.moveTo(x, yy);
+      else ctx.lineTo(x, yy);
+    }
+    ctx.stroke();
+  }
+  ctx.fillStyle = "rgba(255,214,90,0.95)"; // sun
+  ctx.beginPath();
+  ctx.arc(g.W * 0.14, sea * 0.5, Math.min(g.W, g.H) * 0.05, 0, Math.PI * 2);
+  ctx.fill();
+  // beach ball just right of centre
+  const bx = g.W * 0.56, by = g.H * 0.52, br = Math.min(g.W, g.H) * 0.06;
+  ctx.fillStyle = "#ffffff";
+  ctx.beginPath();
+  ctx.arc(bx, by, br, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#e8483f";
+  ctx.beginPath();
+  ctx.moveTo(bx, by);
+  ctx.arc(bx, by, br, -Math.PI / 2, 0);
+  ctx.closePath();
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(bx, by);
+  ctx.arc(bx, by, br, Math.PI / 2, Math.PI);
+  ctx.closePath();
+  ctx.fill();
+  // palm tree just left of centre
+  const px = g.W * 0.44, py = g.H * 0.62, ph = Math.min(g.W, g.H) * 0.2;
+  ctx.strokeStyle = "#8a5a30";
+  ctx.lineWidth = 4 * g.dpr;
+  ctx.beginPath();
+  ctx.moveTo(px, py);
+  ctx.quadraticCurveTo(px - ph * 0.2, py - ph * 0.6, px + ph * 0.05, py - ph);
+  ctx.stroke();
+  ctx.strokeStyle = "#2e9e52";
+  ctx.lineWidth = 5 * g.dpr;
+  ctx.lineCap = "round";
+  for (let a = 0; a < 5; a++) {
+    const ang = -Math.PI / 2 + (a - 2) * 0.6;
+    ctx.beginPath();
+    ctx.moveTo(px + ph * 0.05, py - ph);
+    ctx.lineTo(px + ph * 0.05 + Math.cos(ang) * ph * 0.5, py - ph + Math.sin(ang) * ph * 0.5);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function stageSnow(ctx: Ctx, g: Geo) {
+  ctx.save();
+  // faint ice sheen bands across the whole field
+  const n = 7;
+  for (let i = 0; i < n; i++) {
+    ctx.fillStyle = i % 2 ? "rgba(255,255,255,0.06)" : "rgba(120,160,200,0.06)";
+    ctx.fillRect(0, (i / n) * g.H, g.W, g.H / n + 1);
+  }
+  // scattered snowflakes
+  ctx.strokeStyle = "rgba(255,255,255,0.7)";
+  ctx.lineWidth = 1.5 * g.dpr;
+  for (let i = 0; i < 60; i++) {
+    const x = (((i * 89) % 100) / 100) * g.W;
+    const y = (((i * 47) % 100) / 100) * g.H;
+    const s = (2 + (i % 3)) * g.dpr;
+    for (let a = 0; a < 3; a++) {
+      const ang = (a * Math.PI) / 3;
+      ctx.beginPath();
+      ctx.moveTo(x - Math.cos(ang) * s, y - Math.sin(ang) * s);
+      ctx.lineTo(x + Math.cos(ang) * s, y + Math.sin(ang) * s);
+      ctx.stroke();
+    }
+  }
+  // snowman in the centre
+  const cx = g.W / 2, cy = g.H / 2, u = Math.min(g.W, g.H) * 0.05;
+  ctx.fillStyle = "#ffffff";
+  for (const [dy, rr] of [[1.5, 1], [0.2, 0.78], [-0.9, 0.56]] as const) {
+    ctx.beginPath();
+    ctx.arc(cx, cy + dy * u, rr * u, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.fillStyle = "#1a1a1a"; // eyes + hat
+  ctx.beginPath();
+  ctx.arc(cx - 0.2 * u, cy - u, 0.09 * u, 0, Math.PI * 2);
+  ctx.arc(cx + 0.2 * u, cy - u, 0.09 * u, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillRect(cx - 0.6 * u, cy - 1.55 * u, 1.2 * u, 0.18 * u);
+  ctx.fillRect(cx - 0.42 * u, cy - 2.2 * u, 0.84 * u, 0.7 * u);
+  ctx.fillStyle = "#e8843f"; // carrot nose
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - 0.95 * u);
+  ctx.lineTo(cx + 0.55 * u, cy - 0.82 * u);
+  ctx.lineTo(cx, cy - 0.72 * u);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+const STAGES: Stage[] = [
+  { name: "Horse Race", bg: "#140d05", road: "#101114", infield: "#3f7a3a", line: "rgba(255,255,255,0.25)", edge: "rgba(255,255,255,0.6)", decor: stageHorse },
+  { name: "Soccer Field", bg: "#0a1f0d", road: "#101114", infield: "#2f8f3a", line: "rgba(255,255,255,0.18)", edge: "rgba(255,255,255,0.5)", decor: stageSoccer },
+  { name: "Football Field", bg: "#0a1f0d", road: "#101114", infield: "#2c7a34", line: "rgba(255,255,255,0.18)", edge: "rgba(255,255,255,0.5)", decor: stageFootball },
+  { name: "Stadium", bg: "#080a10", road: "#101114", infield: "#2f7d3a", line: "rgba(255,255,255,0.2)", edge: "rgba(255,255,255,0.55)", decor: stageStadium },
+  { name: "Airport", bg: "#0b0e13", road: "#101114", infield: "#4a4f57", line: "rgba(255,235,120,0.5)", edge: "rgba(255,255,255,0.55)", decor: stageAirport },
+  { name: "River Side", bg: "#07171c", road: "#101114", infield: "#1c6f8c", line: "rgba(255,255,255,0.2)", edge: "rgba(255,255,255,0.55)", decor: stageRiver },
+  { name: "Beach Vibe", bg: "#062330", road: "#101114", infield: "#e8cd94", line: "rgba(120,90,40,0.35)", edge: "rgba(255,255,255,0.7)", decor: stageBeach },
+  { name: "Snow Park", bg: "#0a1622", road: "#101114", infield: "#d7e6f0", line: "rgba(70,110,150,0.35)", edge: "rgba(255,255,255,0.8)", decor: stageSnow },
+];
+const STAGE_ICON = ["🐎", "⚽", "🏈", "🏟️", "✈️", "🛶", "🏖️", "⛄"];
 
 // A single small, dim, colourless sign per spell - no colour, no glow, no orb -
 // so it never competes with the country marble colours.
@@ -342,12 +681,16 @@ function obShape(ctx: Ctx, shape: ObShape, x: number, y: number, s: number, col:
 
 function drawObstacles(ctx: Ctx, g: Geo, obstacles: Obstacle[]) {
   const spread = g.bandHalf - g.size * 0.5;
-  const rad = g.size * 0.34; // small
+  const base = g.size * 0.34; // small
   for (const ob of obstacles) {
     const def = OB[ob.type];
+    const grow = obGrow(ob);
+    const rad = base * (0.4 + 0.6 * grow); // pop-in / fade-out scale
     const p = pathPoint(g, ob.u);
     const x = p.x + p.nx * ob.laneN * spread;
     const y = p.y + p.ny * ob.laneN * spread;
+    ctx.save();
+    ctx.globalAlpha = grow;
     // When a marble just rolled over it, the obstacle lights up (green if good,
     // red if bad) for ~1s. Otherwise it is a dim colourless sign.
     if (ob.lit > 0) {
@@ -368,6 +711,7 @@ function drawObstacles(ctx: Ctx, g: Geo, obstacles: Obstacle[]) {
     } else {
       obShape(ctx, def.shape, x, y, rad, "rgba(205,205,205,0.42)");
     }
+    ctx.restore();
   }
 }
 
@@ -381,6 +725,27 @@ function drawFinish(ctx: Ctx, g: Geo) {
   ctx.moveTo(p.x - p.nx * g.bandHalf, p.y - p.ny * g.bandHalf);
   ctx.lineTo(p.x + p.nx * g.bandHalf, p.y + p.ny * g.bandHalf);
   ctx.stroke();
+  ctx.restore();
+}
+
+// Live "LAP x / N" pill in the top-left corner.
+function drawLaps(ctx: Ctx, g: Geo, lap: number, total: number) {
+  const pad = 10 * g.dpr;
+  ctx.save();
+  ctx.font = `800 ${14 * g.dpr}px ${FONT}`;
+  const text = `LAP ${lap} / ${total}`;
+  const w = ctx.measureText(text).width + pad * 2;
+  const h = 26 * g.dpr;
+  const x = 12 * g.dpr, y = 12 * g.dpr;
+  ctx.fillStyle = "rgba(0,0,0,0.45)";
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, h / 2);
+  ctx.fill();
+  ctx.fillStyle = "#ffffff";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, x + pad, y + h / 2 + g.dpr);
+  ctx.textBaseline = "alphabetic";
   ctx.restore();
 }
 
@@ -440,17 +805,26 @@ function Confetti() {
 
 export default function Race() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [phase, setPhase] = useState<"loading" | "racing" | "done">("loading");
+  const [phase, setPhase] = useState<"loading" | "setup" | "racing" | "done">("loading");
   const [podium, setPodium] = useState<Winner[]>([]);
   const [announce, setAnnounce] = useState("");
   const [codes, setCodes] = useState<{ code: string; hue: number }[]>([]);
+  // Player settings chosen on the setup screen. A ref mirror lets startRace read
+  // the latest values without being re-created on every change.
+  const [round, setRound] = useState(3);
+  const [stageIndex, setStageIndex] = useState(0);
+  const settings = useRef({ round: 3, stage: 0 });
+  settings.current = { round, stage: stageIndex };
   const renderRef = useRef<MarbleRender[]>([]);
   const state = useRef<{
     sprites: HTMLCanvasElement[];
-    theme: Theme;
+    stage: Stage;
     active: Racer[];
     finishers: number[];
     obstacles: Obstacle[];
+    obTimer: number;
+    laps: number; // total laps this race (= chosen round count)
+    finishDist: number; // TRACK_LEN * laps
     countdown: number;
     goFlash: number;
     lastCount: number;
@@ -458,7 +832,7 @@ export default function Race() {
     raf: number;
     last: number;
     ended: boolean;
-  }>({ sprites: [], theme: THEMES[0], active: [], finishers: [], obstacles: [], countdown: 3, goFlash: 0, lastCount: 4, elapsed: 0, raf: 0, last: 0, ended: false });
+  }>({ sprites: [], stage: STAGES[0], active: [], finishers: [], obstacles: [], obTimer: 0, laps: 3, finishDist: TRACK_LEN * 3, countdown: 3, goFlash: 0, lastCount: 4, elapsed: 0, raf: 0, last: 0, ended: false });
 
   useEffect(() => {
     let alive = true;
@@ -475,7 +849,7 @@ export default function Race() {
     ).then((sprites) => {
       if (!alive) return;
       state.current.sprites = sprites;
-      setPhase("racing");
+      setPhase("setup");
     });
     return () => {
       alive = false;
@@ -484,7 +858,9 @@ export default function Race() {
 
   const startRace = useCallback(() => {
     const s = state.current;
-    s.theme = THEMES[Math.floor(Math.random() * THEMES.length)];
+    s.stage = STAGES[settings.current.stage] ?? STAGES[0];
+    s.laps = Math.max(1, settings.current.round); // rounds = laps to race
+    s.finishDist = TRACK_LEN * s.laps;
     // pick 10 distinct random countries
     const pool = COUNTRIES.map((_, i) => i);
     for (let i = pool.length - 1; i > 0; i--) {
@@ -516,13 +892,14 @@ export default function Race() {
       };
     });
     s.finishers = [];
-    // obstacles: one of each type, then random, at random spots
-    s.obstacles = Array.from({ length: OBSTACLES }, (_, k) => ({
-      u: (k + 0.5) / OBSTACLES + (Math.random() - 0.5) * 0.04,
-      laneN: (Math.random() * 2 - 1) * 0.75,
-      type: k < OB_TYPES.length ? OB_TYPES[k] : OB_TYPES[Math.floor(Math.random() * OB_TYPES.length)],
-      lit: 0,
-    }));
+    // Seed a handful at fully-random spots, with staggered lifetimes so they
+    // don't all vanish together. More pop in every second during the race.
+    s.obstacles = Array.from({ length: OB_SEED }, () => {
+      const ob = spawnObstacle();
+      ob.life = ob.maxLife * (0.4 + Math.random() * 0.6);
+      return ob;
+    });
+    s.obTimer = 0;
     s.countdown = 3;
     s.goFlash = 0;
     s.lastCount = 4;
@@ -556,7 +933,7 @@ export default function Race() {
       if (!st.last) st.last = now;
       const dt = Math.min((now - st.last) / 1000, 0.05);
       st.last = now;
-      const g = buildGeo(canvas.width, canvas.height, dpr, st.theme);
+      const g = buildGeo(canvas.width, canvas.height, dpr, st.stage);
 
       if (!st.ended) {
         if (st.countdown > 0) {
@@ -573,7 +950,19 @@ export default function Race() {
         } else {
           st.goFlash = Math.max(0, st.goFlash - dt);
           st.elapsed += dt;
-          for (const ob of st.obstacles) ob.lit = Math.max(0, ob.lit - dt);
+          // Age obstacles out, then pop new ones in on the spawn tick.
+          for (const ob of st.obstacles) {
+            ob.lit = Math.max(0, ob.lit - dt);
+            ob.life -= dt;
+          }
+          st.obstacles = st.obstacles.filter((ob) => ob.life > 0);
+          st.obTimer += dt;
+          while (st.obTimer >= OB_SPAWN_EVERY) {
+            st.obTimer -= OB_SPAWN_EVERY;
+            for (let n = 0; n < OB_SPAWN_COUNT && st.obstacles.length < OB_MAX; n++) {
+              st.obstacles.push(spawnObstacle());
+            }
+          }
           const spread = g.bandHalf - g.size * 0.5;
           for (const r of st.active) {
             r.flash = Math.max(0, r.flash - dt);
@@ -587,6 +976,7 @@ export default function Race() {
             // obstacles change speed/size, never remove
             if (r.obCool <= 0) {
               for (const ob of st.obstacles) {
+                if (obGrow(ob) < 0.9) continue; // ignore while popping in / fading out
                 const near = Math.abs(r.laneN - ob.laneN) * spread < g.size * 0.85;
                 if (near && crossed(u0, u1, ob.u)) {
                   const def = OB[ob.type];
@@ -610,7 +1000,7 @@ export default function Race() {
                 }
               }
             }
-            if (r.dist >= FINISH) {
+            if (r.dist >= st.finishDist) {
               r.place = st.finishers.length + 1;
               st.finishers.push(r.ci);
             }
@@ -629,10 +1019,16 @@ export default function Race() {
       }
 
       separate(st.active, g);
-      drawScenery(ctx, g);
-      drawTrack(ctx, g);
+      drawScenery(ctx, g); // field base fills the whole canvas
+      drawInfield(ctx, g); // stage decoration across the whole map
+      drawTrack(ctx, g); // rounded road ring on top of the field
       drawObstacles(ctx, g, st.obstacles);
       drawFinish(ctx, g);
+      // Live lap counter from the leader's distance.
+      let lead = 0;
+      for (const r of st.active) if (r.dist > lead) lead = r.dist;
+      const lap = Math.min(st.laps, Math.floor(lead / TRACK_LEN) + 1);
+      drawLaps(ctx, g, lap, st.laps);
 
       // Feed marble positions to the 3D overlay (CSS pixels + travel direction).
       const spr = g.bandHalf - g.size * 0.5;
@@ -705,6 +1101,59 @@ export default function Race() {
         </div>
       )}
 
+      {phase === "setup" && (
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-7 overflow-y-auto bg-black/85 px-6 py-8 backdrop-blur-sm">
+          <h1 className="text-4xl font-extrabold text-white sm:text-5xl">Country Racer</h1>
+
+          <div className="flex items-center gap-4">
+            <span className="text-lg font-semibold text-white/70">Round</span>
+            <button
+              onClick={() => setRound((r) => Math.max(1, r - 1))}
+              className="h-11 w-11 rounded-full bg-white/15 text-2xl font-bold text-white transition hover:bg-white/25 active:scale-90"
+              aria-label="Decrease round"
+            >
+              –
+            </button>
+            <span className="w-16 text-center text-3xl font-bold text-white tabular-nums">{round}</span>
+            <button
+              onClick={() => setRound((r) => r + 1)}
+              className="h-11 w-11 rounded-full bg-white/15 text-2xl font-bold text-white transition hover:bg-white/25 active:scale-90"
+              aria-label="Increase round"
+            >
+              +
+            </button>
+          </div>
+
+          <div className="w-full max-w-2xl">
+            <p className="mb-3 text-center text-lg font-semibold text-white/70">Stage</p>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {STAGES.map((st, i) => {
+                const on = i === stageIndex;
+                return (
+                  <button
+                    key={st.name}
+                    onClick={() => setStageIndex(i)}
+                    className={`flex flex-col items-center gap-1.5 rounded-2xl border-2 px-3 py-4 text-center transition active:scale-95 ${
+                      on ? "border-white bg-white/20 scale-105" : "border-white/15 bg-white/5 hover:bg-white/10"
+                    }`}
+                  >
+                    <span className="text-3xl">{STAGE_ICON[i]}</span>
+                    <span className="text-sm font-bold text-white">{st.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <button
+            onClick={startRace}
+            className="rounded-full bg-white px-12 py-4 text-xl font-extrabold text-black transition hover:scale-105 active:scale-95"
+          >
+            Start Race
+          </button>
+        </div>
+      )}
+
       {phase === "done" && podium.length === NEED && (
         <div className="absolute inset-0 z-10 flex flex-col items-center justify-center overflow-hidden bg-black/75 backdrop-blur-sm">
           <Confetti />
@@ -726,12 +1175,20 @@ export default function Race() {
               );
             })}
           </div>
-          <button
-            onClick={startRace}
-            className="mt-12 rounded-full bg-white px-10 py-3.5 text-lg font-bold text-black transition hover:scale-105 active:scale-95"
-          >
-            Race Again
-          </button>
+          <div className="mt-12 flex flex-wrap items-center justify-center gap-3">
+            <button
+              onClick={startRace}
+              className="rounded-full bg-white px-10 py-3.5 text-lg font-bold text-black transition hover:scale-105 active:scale-95"
+            >
+              Race Again
+            </button>
+            <button
+              onClick={() => setPhase("setup")}
+              className="rounded-full border-2 border-white/40 px-8 py-3.5 text-lg font-bold text-white transition hover:bg-white/10 active:scale-95"
+            >
+              Change Stage
+            </button>
+          </div>
         </div>
       )}
     </main>
