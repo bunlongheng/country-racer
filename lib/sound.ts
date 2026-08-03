@@ -272,6 +272,23 @@ export const sound = {
   size() {
     tone({ type: "triangle", from: 500, to: 760, dur: 0.12, gain: 0.12 });
   },
+  // Opening a mystery box - a little magic sparkle.
+  mystery() {
+    [784, 988, 1319].forEach((f, i) =>
+      tone({ type: "triangle", from: f, dur: 0.13, gain: 0.14, delay: i * 0.07 }),
+    );
+    tone({ type: "sine", from: 1568, to: 2093, dur: 0.2, gain: 0.08, delay: 0.2 });
+  },
+  // A bomb coin goes off - low boom + noise blast.
+  explode() {
+    tone({ type: "sawtooth", from: 180, to: 40, dur: 0.4, gain: 0.2 });
+    noiseBurst(0.45, 0.4, 240, true);
+  },
+  // A fire-speed coin - a rising rocket whoosh.
+  fire() {
+    tone({ type: "sawtooth", from: 260, to: 1300, dur: 0.5, gain: 0.14 });
+    noiseBurst(0.4, 0.16, 1200);
+  },
   // Victory fanfare on the podium.
   win() {
     const notes = [523.25, 659.25, 783.99, 1046.5];

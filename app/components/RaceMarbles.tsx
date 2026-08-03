@@ -16,6 +16,7 @@ export type MarbleRender = {
   dist: number;
   flash: number; // 0..1 hit-flash timer
   good: boolean; // green (good) or red (bad) flash
+  out: boolean; // blown up by a bomb - hide the marble
 };
 
 const GREEN = new THREE.Color("#3ee06a");
@@ -47,7 +48,7 @@ function Ball({
     const m = ref.current;
     const d = data.current?.[index];
     if (!m) return;
-    if (!d) {
+    if (!d || d.out) {
       m.visible = false;
       return;
     }
