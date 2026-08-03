@@ -21,7 +21,8 @@
 - On the setup screen you pick a **stage**, the number of **laps** (rounds), and whether to show the **live results** board or let it **auto-play** hands-free.
 - **10 random countries** line up as **true 3D glossy flag marbles** (WebGL) and race around a themed oval track.
 - **8 themed stages** paint the whole map as their scene - Horse Race, Soccer Field, Football Field, Stadium, Airport, River Side, Beach Vibe, Snow Park - and the marble runs on the terrain.
-- **Hazards** spawn on the track 2 at a time every second - boost, mud, tar, banana, shrink, grow - so the pack keeps shuffling.
+- **8 mystery `?` boxes** sit fixed at the 3 and 9 o'clock sides; open one and it rolls a random effect - boost, mud, tar, banana, shrink, grow, or a big **fire** speed boost - then refills.
+- Rare **bomb mines** drop onto the track - roll over one and you are knocked out (unless too few racers remain to spare one).
 - A **live top-5 board** (top-left) and **1/2/3 medal badges** over the leaders track the standings in real time.
 - After the set laps, the first 3 across the line take the **podium** - gold, silver, bronze - with confetti and a celebration fanfare.
 - Each stage has its own **synth music** (starts on GO) and all sound effects are synthesised - **zero audio files**.
@@ -37,8 +38,8 @@ The race is a small, **pure, unit-tested core** driven by a single `requestAnima
 ```mermaid
 flowchart LR
   A[10 random racers<br/>random form] --> B[step by real dt<br/>speed wobbles]
-  B --> C{rolled over<br/>a hazard?}
-  C -- yes --> D[apply effect<br/>boost / mud / grow ...]
+  B --> C{rolled over a<br/>? box or mine?}
+  C -- yes --> D[box: random effect<br/>mine: knocked out]
   C -- no --> E[full speed]
   D --> F[separate<br/>no overlap]
   E --> F

@@ -17,14 +17,13 @@ const RaceMarbles = dynamic(() => import("./RaceMarbles"), { ssr: false });
 const SPRITE = 96; // baked marble sprite resolution (px)
 const RACERS = 10; // fixed field - ten marbles, no more
 const NEED = 3; // finishers needed to end the race
-const OB_SEED = 6; // obstacles present when the race starts
-const OB_MAX = 18; // never more than this many alive at once
-const OB_SPAWN_EVERY = 1; // seconds between spawn ticks
-const OB_SPAWN_COUNT = 2; // obstacles that pop in each tick
-const BOMB_EVERY = 10; // one bomb coin pops in this often (rare + deadly)
-const FIRE_EVERY = 10; // one fire-speed coin pops in this often (rare + winning)
-const MYSTERY_EVERY = 8; // a fresh line of 3 ? boxes across the track this often
-const MYSTERY_LANES = [-0.55, 0, 0.55]; // the 3 lanes the ? boxes line up across
+const BOMB_EVERY = 10; // one bomb mine drops onto the track this often (rare + deadly)
+// Mystery ? boxes are fixed fixtures - 2 at the 3 o'clock spot and 2 at the 9
+// o'clock spot, always on the track. Opening one hides it briefly, then it refills.
+const MYSTERY_SPOTS = [0.25, 0.75]; // u of the right (3 o'clock) + left (9 o'clock) sides
+const MYSTERY_LANES = [-0.6, -0.2, 0.2, 0.6]; // four lanes at each spot -> 8 boxes total
+const MYSTERY_REFILL = 2.2; // seconds an opened box stays gone before it refills
+const MYSTERY_MAXLIFE = 1e6; // effectively never ages out (unlike pooled obstacles)
 const FONT = "system-ui, -apple-system, 'Segoe UI', sans-serif";
 
 type Racer = {
@@ -51,37 +50,29 @@ type Winner = { country: Country; place: number };
 // A one-off explosion drawn where a marble hit a bomb (position from u/laneN).
 type Blast = { u: number; laneN: number; life: number; max: number };
 
-// Obstacle types + their effect. Fires are gone - nothing removes a marble.
-// `good` = green flash (helps you); otherwise a red flash (hurts you).
+// Obstacle types + their effect. `good` = green flash (helps you); otherwise a
+// red flash (hurts you). Bombs are floor mines that eliminate; fire is the big
+// speed boost, now one of the mystery-box outcomes.
 type ObType = "boost" | "mud" | "tar" | "banana" | "shrink" | "grow" | "mystery" | "bomb" | "fire";
 type ObShape = "bolt" | "droplet" | "skull" | "banana" | "up" | "down" | "mystery";
-type Obstacle = { u: number; laneN: number; type: ObType; lit: number; life: number; maxLife: number };
+// `respawn` > 0 means an opened mystery box is hidden, counting down to a refill.
+type Obstacle = { u: number; laneN: number; type: ObType; lit: number; life: number; maxLife: number; respawn: number };
 
-// A fresh obstacle at a random spot / lane / type, with a random lifetime so the
-// field is never the same twice and marbles keep appearing and fading out.
-function spawnObstacle(): Obstacle {
-  const maxLife = 4 + Math.random() * 3.5; // lives 4 - 7.5s
-  return {
-    u: Math.random(),
-    laneN: (Math.random() * 2 - 1) * 0.8,
-    type: OB_TYPES[Math.floor(Math.random() * OB_TYPES.length)],
-    lit: 0,
-    life: maxLife,
-    maxLife,
-  };
+// The 8 fixed mystery ? boxes: 4 lanes at each of the 3 o'clock + 9 o'clock spots.
+// They never age out - opening one hides it for MYSTERY_REFILL seconds, then it
+// pops back, so 8 are always on the track for the pack to grab each lap.
+function spawnMysteryFixtures(): Obstacle[] {
+  const boxes: Obstacle[] = [];
+  for (const u of MYSTERY_SPOTS) {
+    for (const laneN of MYSTERY_LANES) {
+      boxes.push({ u, laneN, type: "mystery", lit: 0, life: MYSTERY_MAXLIFE, maxLife: MYSTERY_MAXLIFE, respawn: 0 });
+    }
+  }
+  return boxes;
 }
 
-// A line of 3 mystery ? boxes across the track at one spot, so marbles in every
-// lane can grab one as the pack sweeps through. They linger, and aren't consumed
-// on hit, so more than one racer can open the same row.
-function spawnMysteryRow(): Obstacle[] {
-  const u = Math.random();
-  const maxLife = 6;
-  return MYSTERY_LANES.map((laneN) => ({ u, laneN, type: "mystery" as ObType, lit: 0, life: maxLife, maxLife }));
-}
-
-// A rare coin (bomb or fire) that lies on the floor and lingers a good while so
-// a marble has time to roll onto it. Spawned by its own 10s timer, not the pool.
+// A bomb mine that lies flat on the floor and lingers a good while so a marble has
+// time to roll onto it. Dropped by its own ~10s timer.
 function spawnCoin(type: ObType): Obstacle {
   const maxLife = 8 + Math.random() * 3; // sits for 8 - 11s
   return {
@@ -91,6 +82,7 @@ function spawnCoin(type: ObType): Obstacle {
     lit: 0,
     life: maxLife,
     maxLife,
+    respawn: 0,
   };
 }
 
@@ -111,14 +103,11 @@ const OB: Record<ObType, { shape: ObShape; good: boolean; mul?: number; time?: n
   shrink: { shape: "down", good: true, scale: 0.78 }, // small -> faster
   grow: { shape: "up", good: false, scale: 1.28 }, // big -> slower
   mystery: { shape: "mystery", good: true }, // ? box - rolls a random effect
-  bomb: { shape: "mystery", good: false }, // coin - explode + eliminate
-  fire: { shape: "mystery", good: true }, // coin - big sustained boost
+  bomb: { shape: "mystery", good: false }, // floor mine - explode + eliminate
+  fire: { shape: "bolt", good: true, mul: 2.4, time: 3.0 }, // big boost (mystery outcome)
 };
-// The auto-popping pool (2 pop in each second). The ? mystery boxes, bomb + fire
-// coins have their own timers instead of riding this random pool.
-const OB_TYPES: ObType[] = ["boost", "mud", "tar", "banana", "shrink", "grow"];
-// What a mystery box can turn into when a marble opens it.
-const MYSTERY_POOL: ObType[] = ["boost", "mud", "tar", "banana", "shrink", "grow"];
+// What a mystery box can turn into when a marble opens it (fire = big speed boost).
+const MYSTERY_POOL: ObType[] = ["boost", "mud", "tar", "banana", "shrink", "grow", "fire"];
 
 
 function bakeMarble(img: HTMLImageElement): HTMLCanvasElement {
@@ -272,16 +261,15 @@ function obShape(ctx: Ctx, shape: ObShape, x: number, y: number, s: number, col:
   }
 }
 
-// A Mario-Kart mystery box: a real gold cube that floats and spins about its
-// vertical axis, seen slightly from above, with a bold "?" on the front face.
-// `phase` (from ob.u) keeps neighbouring boxes out of sync.
+// A Mario-Kart mystery box: a solid gold isometric cube that floats up and down,
+// showing its top + two front faces so it always reads as a 3D cube, with a bold
+// "?" on the front. `phase` (from ob.u) keeps neighbouring boxes out of sync.
 function drawMysteryBox(ctx: Ctx, x: number, y: number, s: number, t: number, phase: number, lit: number) {
-  const bob = Math.sin(t * 2.4 + phase * 6.283) * s * 0.3; // float up/down
-  const a = t * 1.9 + phase * 6.283; // spin angle about the vertical axis
-  const d = s * 0.62; // half side length
-  const tilt = 0.32; // view the cube a little from above (top face shows)
-  const ca = Math.cos(a);
-  const sa = Math.sin(a);
+  const bob = Math.sin(t * 2.4 + phase * 6.283) * s * 0.28; // float up/down
+  const w = s * 0.62; // half the diamond width
+  const q = w * 0.5; // top-diamond half-height (2:1 isometric)
+  const h = s * 0.9; // height of the vertical faces
+  const topY = -h / 2; // y of the diamond's horizontal midline
   ctx.save();
   ctx.translate(x, y + bob);
   // soft glow behind the box
@@ -293,66 +281,52 @@ function drawMysteryBox(ctx: Ctx, x: number, y: number, s: number, t: number, ph
   ctx.beginPath();
   ctx.arc(0, 0, s * 2, 0, Math.PI * 2);
   ctx.fill();
-  // 4 top-view corners, rotated about the vertical axis -> screen x + depth z
-  const corners = [
-    [-1, -1],
-    [1, -1],
-    [1, 1],
-    [-1, 1],
-  ].map(([cx, cz]) => ({ sx: (cx * ca - cz * sa) * d, z: (cx * sa + cz * ca) * d }));
-  const yAt = (z: number, vy: number) => vy - z * tilt; // fake perspective for depth
-  // the 4 vertical side faces; a face is visible when its middle faces the viewer
-  const faces = [0, 1, 2, 3].map((i) => {
-    const c0 = corners[i];
-    const c1 = corners[(i + 1) % 4];
-    return { c0, c1, midZ: (c0.z + c1.z) / 2 };
-  });
-  faces.sort((f, g) => f.midZ - g.midZ); // far -> near
-  const front = faces[faces.length - 1];
+  // cube corners: top diamond + the front seam / bottom outline
+  const dTop = [0, topY - q];
+  const dRight = [w, topY];
+  const dBot = [0, topY + q];
+  const dLeft = [-w, topY];
+  const bBot = [0, topY + q + h];
+  const bRight = [w, topY + h];
+  const bLeft = [-w, topY + h];
+  const lift = lit > 0 ? 32 : 0; // brighten while a marble is opening it
+  const lin = (x0: number, y0: number, x1: number, y1: number, a: string, b: string) => {
+    const g = ctx.createLinearGradient(x0, y0, x1, y1);
+    g.addColorStop(0, a);
+    g.addColorStop(1, b);
+    return g;
+  };
+  const face = (pts: number[][], fill: string | CanvasGradient) => {
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+    ctx.closePath();
+    ctx.fillStyle = fill;
+    ctx.fill();
+    ctx.stroke();
+  };
   ctx.lineWidth = Math.max(1, s * 0.05);
   ctx.strokeStyle = "#8a5210";
   ctx.lineJoin = "round";
-  for (const f of faces) {
-    if (f.midZ <= 0.001) continue; // back-facing, hidden
-    const k = Math.max(0, Math.min(1, f.midZ / d)); // 1 = head-on, 0 = edge-on
-    ctx.beginPath();
-    ctx.moveTo(f.c0.sx, yAt(f.c0.z, -d));
-    ctx.lineTo(f.c1.sx, yAt(f.c1.z, -d));
-    ctx.lineTo(f.c1.sx, yAt(f.c1.z, d));
-    ctx.lineTo(f.c0.sx, yAt(f.c0.z, d));
-    ctx.closePath();
-    const gg = ctx.createLinearGradient(0, -d, 0, d);
-    gg.addColorStop(0, `rgb(${Math.round(190 + 60 * k)},${Math.round(140 + 80 * k)},${Math.round(60 + 40 * k)})`);
-    gg.addColorStop(1, `rgb(${Math.round(150 + 80 * k)},${Math.round(95 + 90 * k)},${Math.round(20 + 55 * k)})`);
-    ctx.fillStyle = gg;
-    ctx.fill();
-    ctx.stroke();
-  }
-  // top face (always visible from above) - lightest
-  ctx.beginPath();
-  ctx.moveTo(corners[0].sx, yAt(corners[0].z, -d));
-  for (let i = 1; i < 4; i++) ctx.lineTo(corners[i].sx, yAt(corners[i].z, -d));
-  ctx.closePath();
-  ctx.fillStyle = "#fff0b0";
-  ctx.fill();
-  ctx.stroke();
-  // "?" painted on the front face - squashed to the face's turned-away width
-  const fw = front.c1.sx - front.c0.sx;
-  const scaleX = Math.max(0.06, Math.abs(fw) / (2 * d));
-  ctx.save();
-  ctx.translate((front.c0.sx + front.c1.sx) / 2, yAt(front.midZ, 0));
-  ctx.scale(scaleX, 1);
+  const rgb = (r: number, g: number, b: number) =>
+    `rgb(${Math.min(255, r + lift)},${Math.min(255, g + lift)},${Math.min(255, b + lift)})`;
+  // right face (in shadow, darkest), left face (front, lit), top (brightest)
+  face([dBot, dRight, bRight, bBot], lin(0, topY, 0, topY + q + h, rgb(214, 158, 46), rgb(176, 122, 26)));
+  face([dLeft, dBot, bBot, bLeft], lin(0, topY, 0, topY + q + h, rgb(238, 190, 66), rgb(200, 150, 40)));
+  face([dTop, dRight, dBot, dLeft], lin(0, topY - q, 0, topY + q, rgb(255, 226, 130), rgb(250, 208, 74)));
+  // bold "?" on the front (left) face, centred over that parallelogram
+  const cx = (dLeft[0] + dBot[0] + bBot[0] + bLeft[0]) / 4;
+  const cy = (dLeft[1] + dBot[1] + bBot[1] + bLeft[1]) / 4;
   ctx.fillStyle = "#7a3d05";
-  ctx.font = `900 ${s * 0.95}px ${FONT}`;
+  ctx.font = `900 ${h * 0.62}px ${FONT}`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText("?", 0, 0);
+  ctx.fillText("?", cx, cy);
   ctx.textBaseline = "alphabetic";
-  ctx.restore();
   ctx.restore();
 }
 
-// Emblem painted on the spinning coin face.
+// Flame emblem, shown above a marble that just grabbed the fire speed boost.
 function drawFlame(ctx: Ctx, s: number) {
   ctx.fillStyle = "#fff1c2";
   ctx.beginPath();
@@ -367,53 +341,64 @@ function drawFlame(ctx: Ctx, s: number) {
   ctx.bezierCurveTo(-s * 0.14, s * 0.45, -s * 0.24, s * 0.04, 0, -s * 0.28);
   ctx.fill();
 }
-function drawBombIcon(ctx: Ctx, s: number) {
-  ctx.fillStyle = "#12060a";
-  ctx.beginPath();
-  ctx.arc(0, s * 0.12, s * 0.52, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = "#ffd08a";
-  ctx.lineWidth = Math.max(1.2, s * 0.1);
-  ctx.lineCap = "round";
-  ctx.beginPath();
-  ctx.moveTo(s * 0.2, -s * 0.34);
-  ctx.quadraticCurveTo(s * 0.52, -s * 0.5, s * 0.42, -s * 0.72);
-  ctx.stroke();
-  ctx.fillStyle = "#fff2b0";
-  ctx.beginPath();
-  ctx.arc(s * 0.42, -s * 0.76, s * 0.12, 0, Math.PI * 2);
-  ctx.fill();
-}
-
-// A flat coin lying on the floor: floats a touch and spins edge-on. `fire` = the
-// hot orange speed coin; otherwise the dark red bomb coin.
-function drawCoin(ctx: Ctx, x: number, y: number, s: number, t: number, phase: number, lit: number, fire: boolean) {
-  const bob = Math.sin(t * 2.0 + phase * 6.283) * s * 0.18;
-  const face = 0.18 + 0.82 * Math.abs(Math.cos(t * 3.4 + phase * 6.283)); // spin (never fully edge-on)
-  const rw = Math.max(1, s * face);
+// A land mine lying flat on the floor: a dark spiked dome ringed in hazard red
+// with a white skull. No float, no spin - a static "danger, dead ahead" marker.
+function drawMine(ctx: Ctx, x: number, y: number, s: number, lit: number) {
   ctx.save();
-  ctx.translate(x, y + bob);
-  const gc = fire ? "255,150,40" : "255,70,60";
-  const glow = ctx.createRadialGradient(0, 0, s * 0.2, 0, 0, s * 2.2);
-  glow.addColorStop(0, `rgba(${gc},${lit > 0 ? 0.7 : 0.42})`);
-  glow.addColorStop(1, `rgba(${gc},0)`);
+  ctx.translate(x, y);
+  // red danger glow, stronger the instant a marble trips it
+  const glow = ctx.createRadialGradient(0, 0, s * 0.2, 0, 0, s * 2.4);
+  glow.addColorStop(0, `rgba(255,40,40,${lit > 0 ? 0.85 : 0.4})`);
+  glow.addColorStop(1, "rgba(255,40,40,0)");
   ctx.fillStyle = glow;
   ctx.beginPath();
-  ctx.arc(0, 0, s * 2.2, 0, Math.PI * 2);
+  ctx.arc(0, 0, s * 2.4, 0, Math.PI * 2);
   ctx.fill();
-  const fill = ctx.createLinearGradient(0, -s, 0, s);
-  fill.addColorStop(0, fire ? "#ff9d3a" : "#b0242a");
-  fill.addColorStop(1, fire ? "#c85a0e" : "#5c0d12");
-  ctx.fillStyle = fill;
+  // spikes poking out around the rim, squashed flat to sit on the floor
+  ctx.fillStyle = "#3a1416";
+  const spikes = 8;
+  for (let i = 0; i < spikes; i++) {
+    const a = (i / spikes) * Math.PI * 2;
+    const bx = Math.cos(a);
+    const by = Math.sin(a) * 0.6;
+    ctx.beginPath();
+    ctx.moveTo(bx * s * 1.02, by * s * 1.02);
+    ctx.lineTo(bx * s * 1.44, by * s * 1.44);
+    ctx.lineTo((bx * 1.08 - by * 0.18) * s, (by * 1.08 + bx * 0.18) * s);
+    ctx.closePath();
+    ctx.fill();
+  }
+  // flattened dome body
+  const body = ctx.createRadialGradient(-s * 0.3, -s * 0.3, s * 0.12, 0, 0, s);
+  body.addColorStop(0, "#5a2226");
+  body.addColorStop(1, "#180809");
+  ctx.fillStyle = body;
   ctx.beginPath();
-  ctx.ellipse(0, 0, rw, s, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, 0, s, s * 0.7, 0, 0, Math.PI * 2);
   ctx.fill();
-  ctx.lineWidth = Math.max(1.5, s * 0.14);
-  ctx.strokeStyle = fire ? "#ffd08a" : "#ff7b74";
+  // hazard ring
+  ctx.lineWidth = Math.max(1.5, s * 0.12);
+  ctx.strokeStyle = lit > 0 ? "#ff5a5a" : "#c02a2a";
+  ctx.beginPath();
+  ctx.ellipse(0, 0, s * 0.82, s * 0.56, 0, 0, Math.PI * 2);
   ctx.stroke();
-  ctx.scale(face, 1); // squash the emblem with the spin
-  if (fire) drawFlame(ctx, s);
-  else drawBombIcon(ctx, s);
+  // white skull warning
+  ctx.fillStyle = "rgba(255,255,255,0.94)";
+  ctx.beginPath();
+  ctx.arc(0, -s * 0.08, s * 0.4, Math.PI, 0);
+  ctx.lineTo(s * 0.28, s * 0.2);
+  ctx.lineTo(s * 0.14, s * 0.2);
+  ctx.lineTo(s * 0.14, s * 0.32);
+  ctx.lineTo(-s * 0.14, s * 0.32);
+  ctx.lineTo(-s * 0.14, s * 0.2);
+  ctx.lineTo(-s * 0.28, s * 0.2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = "#180809";
+  ctx.beginPath();
+  ctx.arc(-s * 0.16, -s * 0.06, s * 0.1, 0, Math.PI * 2);
+  ctx.arc(s * 0.16, -s * 0.06, s * 0.1, 0, Math.PI * 2);
+  ctx.fill();
   ctx.restore();
 }
 
@@ -450,7 +435,6 @@ function drawObstacles(ctx: Ctx, g: Geo, obstacles: Obstacle[], t: number) {
   const spread = g.bandHalf - g.size * 0.5;
   const base = g.size * 0.34; // small
   for (const ob of obstacles) {
-    const def = OB[ob.type];
     const grow = obGrow(ob);
     const rad = base * (0.4 + 0.6 * grow); // pop-in / fade-out scale
     const p = pathPoint(g, ob.u);
@@ -458,36 +442,11 @@ function drawObstacles(ctx: Ctx, g: Geo, obstacles: Obstacle[], t: number) {
     const y = p.y + p.ny * ob.laneN * spread;
     ctx.save();
     ctx.globalAlpha = grow;
-    // The ? box and the bomb/fire coins render themselves (floating + spinning).
     if (ob.type === "mystery") {
-      drawMysteryBox(ctx, x, y, rad * 1.25, t, ob.u, ob.lit);
-      ctx.restore();
-      continue;
-    }
-    if (ob.type === "bomb" || ob.type === "fire") {
-      drawCoin(ctx, x, y, rad * 1.2, t, ob.u, ob.lit, ob.type === "fire");
-      ctx.restore();
-      continue;
-    }
-    // When a marble just rolled over it, the obstacle lights up (green if good,
-    // red if bad) for ~1s. Otherwise it is a dim colourless sign.
-    if (ob.lit > 0) {
-      const c = def.good ? "80,220,120" : "235,80,70";
-      const glow = ctx.createRadialGradient(x, y, rad * 0.2, x, y, rad * 2.3);
-      glow.addColorStop(0, `rgba(${c},${0.5 * ob.lit})`);
-      glow.addColorStop(1, `rgba(${c},0)`);
-      ctx.fillStyle = glow;
-      ctx.beginPath();
-      ctx.arc(x, y, rad * 2.3, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(x, y, rad * 1.35, 0, Math.PI * 2);
-      ctx.lineWidth = 2.5 * g.dpr;
-      ctx.strokeStyle = `rgba(${c},${ob.lit})`;
-      ctx.stroke();
-      obShape(ctx, def.shape, x, y, rad, `rgba(255,255,255,${0.5 + 0.5 * ob.lit})`);
-    } else {
-      obShape(ctx, def.shape, x, y, rad, "rgba(205,205,205,0.42)");
+      // hidden while an opened box counts down to its refill
+      if (ob.respawn <= 0) drawMysteryBox(ctx, x, y, rad * 1.25, t, ob.u, ob.lit);
+    } else if (ob.type === "bomb") {
+      drawMine(ctx, x, y, rad * 1.25, ob.lit);
     }
     ctx.restore();
   }
@@ -729,10 +688,7 @@ export default function Race() {
     active: Racer[];
     finishers: number[];
     obstacles: Obstacle[];
-    obTimer: number;
-    bombTimer: number; // counts up to BOMB_EVERY, then a bomb coin pops in
-    fireTimer: number; // counts up to FIRE_EVERY, then a fire coin pops in
-    mysteryTimer: number; // counts up to MYSTERY_EVERY, then a ? box row pops in
+    bombTimer: number; // counts up to BOMB_EVERY, then a bomb mine drops in
     blasts: Blast[]; // live explosions to draw
     laps: number; // total laps this race (= chosen round count)
     finishDist: number; // TRACK_LEN * laps
@@ -745,7 +701,7 @@ export default function Race() {
     ended: boolean;
     podiumIn: number; // seconds left before the podium shows (-1 = race not decided yet)
     showLive: boolean; // draw the live top-5 board
-  }>({ sprites: [], stage: STAGES[0], active: [], finishers: [], obstacles: [], obTimer: 0, bombTimer: 0, fireTimer: 0, mysteryTimer: 0, blasts: [], laps: 3, finishDist: TRACK_LEN * 3, countdown: 3, goFlash: 0, lastCount: 4, elapsed: 0, raf: 0, last: 0, ended: false, podiumIn: -1, showLive: true });
+  }>({ sprites: [], stage: STAGES[0], active: [], finishers: [], obstacles: [], bombTimer: 0, blasts: [], laps: 3, finishDist: TRACK_LEN * 3, countdown: 3, goFlash: 0, lastCount: 4, elapsed: 0, raf: 0, last: 0, ended: false, podiumIn: -1, showLive: true });
 
   // Flags are baked lazily (only the 10 that race, in startRace), so a cold load
   // goes straight to the setup screen instead of baking all 194 sprites upfront.
@@ -807,19 +763,10 @@ export default function Race() {
       };
     });
     s.finishers = [];
-    // Seed a handful at fully-random spots, with staggered lifetimes so they
-    // don't all vanish together. More pop in every second during the race.
-    s.obstacles = Array.from({ length: OB_SEED }, () => {
-      const ob = spawnObstacle();
-      ob.life = ob.maxLife * (0.4 + Math.random() * 0.6);
-      return ob;
-    });
-    s.obTimer = 0;
-    // Stagger the first pops: a fire coin arrives early (chance to break away),
-    // the first bomb a bit later so eliminations don't start too soon.
+    // The 8 mystery boxes are permanent fixtures on the track from the start; the
+    // first bomb mine holds off a couple seconds so eliminations don't begin too soon.
+    s.obstacles = spawnMysteryFixtures();
     s.bombTimer = 2;
-    s.fireTimer = 6;
-    s.mysteryTimer = MYSTERY_EVERY - 3; // first row of ? boxes ~3s in
     s.blasts = [];
     s.countdown = 3;
     s.goFlash = 0;
@@ -875,34 +822,26 @@ export default function Race() {
         } else {
           st.goFlash = Math.max(0, st.goFlash - dt);
           st.elapsed += dt;
-          // Age obstacles out, then pop new ones in on the spawn tick.
+          // Mystery boxes are fixed fixtures: they don't age. An opened one counts
+          // its refill down, then pops back in. Bomb mines age out normally.
           for (const ob of st.obstacles) {
             ob.lit = Math.max(0, ob.lit - dt);
+            if (ob.type === "mystery" && ob.respawn > 0) {
+              ob.respawn -= dt;
+              if (ob.respawn <= 0) {
+                ob.respawn = 0;
+                ob.life = ob.maxLife; // refill: replay the pop-in
+              }
+              continue;
+            }
             ob.life -= dt;
           }
           st.obstacles = st.obstacles.filter((ob) => ob.life > 0);
-          st.obTimer += dt;
-          while (st.obTimer >= OB_SPAWN_EVERY) {
-            st.obTimer -= OB_SPAWN_EVERY;
-            for (let n = 0; n < OB_SPAWN_COUNT && st.obstacles.length < OB_MAX; n++) {
-              st.obstacles.push(spawnObstacle());
-            }
-          }
-          // Rare coins on their own timers - one bomb + one fire every ~10s.
+          // A bomb mine drops onto the track on its own timer.
           st.bombTimer += dt;
           if (st.bombTimer >= BOMB_EVERY) {
             st.bombTimer -= BOMB_EVERY;
             st.obstacles.push(spawnCoin("bomb"));
-          }
-          st.fireTimer += dt;
-          if (st.fireTimer >= FIRE_EVERY) {
-            st.fireTimer -= FIRE_EVERY;
-            st.obstacles.push(spawnCoin("fire"));
-          }
-          st.mysteryTimer += dt;
-          if (st.mysteryTimer >= MYSTERY_EVERY) {
-            st.mysteryTimer -= MYSTERY_EVERY;
-            st.obstacles.push(...spawnMysteryRow());
           }
           // Age explosions out.
           for (const b of st.blasts) b.life -= dt;
@@ -918,9 +857,10 @@ export default function Race() {
             const slow = (r.effTime > 0 ? r.effMul : 1) / r.scale; // small=fast, big=slow
             stepRacer(r, dt, st.elapsed, undefined, slow);
             const u1 = uOf(r);
-            // obstacles change speed/size; bombs eliminate; fire is a big boost
+            // mystery boxes change speed/size (or fire = big boost); bombs eliminate
             if (r.obCool <= 0) {
               for (const ob of st.obstacles) {
+                if (ob.type === "mystery" && ob.respawn > 0) continue; // eaten, refilling
                 if (obGrow(ob) < 0.9) continue; // ignore while popping in / fading out
                 const near = Math.abs(r.laneN - ob.laneN) * spread < g.size * 0.85;
                 if (!(near && crossed(u0, u1, ob.u))) continue;
@@ -940,19 +880,10 @@ export default function Race() {
                     sound.splat();
                   }
                   r.flashGood = false;
-                } else if (ob.type === "fire") {
-                  r.effMul = 2.4; // big, long boost - usually the winner
-                  r.effTime = 3.5;
-                  r.fx = "fire";
-                  r.fxTime = 3.5;
-                  sound.fire();
-                  r.flashGood = true;
                 } else {
-                  // Mystery box opens into a random effect; spells fire directly.
-                  const effType =
-                    ob.type === "mystery"
-                      ? MYSTERY_POOL[Math.floor(Math.random() * MYSTERY_POOL.length)]
-                      : ob.type;
+                  // Mystery box opens into a random effect - boost / mud / tar /
+                  // banana / shrink / grow, or fire (the big speed boost).
+                  const effType = MYSTERY_POOL[Math.floor(Math.random() * MYSTERY_POOL.length)];
                   const def = OB[effType];
                   if (def.mul) {
                     r.effMul = def.mul;
@@ -961,18 +892,15 @@ export default function Race() {
                   if (def.scale) r.scale = Math.max(0.62, Math.min(1.5, r.scale * def.scale));
                   r.fx = effType; // show the effect's icon above the marble
                   r.fxTime = def.mul ? (def.time ?? 1) : 1.4;
-                  if (ob.type === "mystery") sound.mystery();
-                  else if (def.mul) {
-                    if (effType === "boost") sound.boost();
-                    else if (effType === "banana") sound.slip();
-                    else sound.splat();
-                  } else if (def.scale) sound.size();
+                  sound.mystery();
+                  if (effType === "fire") sound.fire(); // extra whoosh on the big boost
                   r.flashGood = def.good;
                 }
-                // light the obstacle up + flash the marble edge (~1s). Coins are
-                // consumed on contact so one marble can't chain-hit the pack.
+                // light it up + flash the marble edge (~1s). A bomb mine is consumed;
+                // an opened mystery box hides, then refills after MYSTERY_REFILL.
                 ob.lit = 1;
-                if (ob.type === "bomb" || ob.type === "fire") ob.life = 0;
+                if (ob.type === "bomb") ob.life = 0;
+                else ob.respawn = MYSTERY_REFILL;
                 r.flash = 1;
                 r.obCool = 0.35;
                 break;
