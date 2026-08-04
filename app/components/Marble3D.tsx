@@ -1,21 +1,20 @@
 "use client";
 
-import { useTexture } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
+import { itemTexture } from "./marbleTexture";
+import type { RacerItem } from "../data/categories";
 
-// A true 3D glossy marble: a high-poly sphere wrapped with the flag and finished
-// with a clearcoat so it reads like polished glass. Auto-rotates.
-export default function Marble3D({ code, hue }: { code: string; hue: number }) {
-  const tex = useTexture(`/flags/${code}.png`);
+// A true 3D glossy marble: a high-poly sphere wrapped with the racer's skin (flag,
+// emoji, or solid colour) and finished with a clearcoat so it reads like polished
+// glass. Auto-rotates.
+export default function Marble3D({ item }: { item: RacerItem }) {
+  const tex = useMemo(() => itemTexture(item), [item]);
   const ref = useRef<THREE.Mesh>(null);
-  const emissive = useMemo(() => new THREE.Color().setHSL(hue / 360, 0.9, 0.5), [hue]);
+  const emissive = useMemo(() => new THREE.Color().setHSL(item.hue / 360, 0.9, 0.5), [item.hue]);
 
-  useMemo(() => {
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.anisotropy = 8;
-  }, [tex]);
+  useEffect(() => () => tex.dispose(), [tex]);
 
   useFrame((_, dt) => {
     if (ref.current) ref.current.rotation.y += dt * 0.9;

@@ -1,10 +1,11 @@
 "use client";
 
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { useTexture } from "@react-three/drei";
-import { Suspense, useMemo, useRef, type RefObject } from "react";
+import { Suspense, useEffect, useMemo, useRef, type RefObject } from "react";
 import * as THREE from "three";
 import Studio from "./Studio";
+import { itemTexture } from "./marbleTexture";
+import type { RacerItem } from "../data/categories";
 
 // Per-frame render data written by the 2D physics loop (CSS pixels).
 export type MarbleRender = {
@@ -23,26 +24,21 @@ const GREEN = new THREE.Color("#3ee06a");
 const RED = new THREE.Color("#ff4a44");
 
 function Ball({
-  code,
-  hue,
+  item,
   index,
   data,
 }: {
-  code: string;
-  hue: number;
+  item: RacerItem;
   index: number;
   data: RefObject<MarbleRender[]>;
 }) {
-  const tex = useTexture(`/flags/${code}.png`);
+  const tex = useMemo(() => itemTexture(item), [item]);
   const ref = useRef<THREE.Mesh>(null);
   const prev = useRef(0);
   const { size } = useThree();
-  const emissive = useMemo(() => new THREE.Color().setHSL(hue / 360, 0.9, 0.5), [hue]);
+  const emissive = useMemo(() => new THREE.Color().setHSL(item.hue / 360, 0.9, 0.5), [item.hue]);
 
-  useMemo(() => {
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.anisotropy = 8;
-  }, [tex]);
+  useEffect(() => () => tex.dispose(), [tex]);
 
   useFrame(() => {
     const m = ref.current;
@@ -92,10 +88,10 @@ function Ball({
 }
 
 export default function RaceMarbles({
-  codes,
+  items,
   data,
 }: {
-  codes: { code: string; hue: number }[];
+  items: RacerItem[];
   data: RefObject<MarbleRender[]>;
 }) {
   return (
@@ -108,8 +104,8 @@ export default function RaceMarbles({
     >
       <Suspense fallback={null}>
         <Studio />
-        {codes.map((c, i) => (
-          <Ball key={i} code={c.code} hue={c.hue} index={i} data={data} />
+        {items.map((it, i) => (
+          <Ball key={i} item={it} index={i} data={data} />
         ))}
       </Suspense>
     </Canvas>

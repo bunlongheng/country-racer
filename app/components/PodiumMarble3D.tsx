@@ -4,9 +4,10 @@ import { Canvas } from "@react-three/fiber";
 import { Suspense } from "react";
 import Marble3D from "./Marble3D";
 import Studio from "./Studio";
+import type { RacerItem } from "../data/categories";
 
 // One spinning HD 3D glossy marble for a podium slot.
-export default function PodiumMarble3D({ code, hue }: { code: string; hue: number }) {
+export default function PodiumMarble3D({ item }: { item: RacerItem }) {
   return (
     <Canvas
       dpr={[1, 2]}
@@ -15,7 +16,7 @@ export default function PodiumMarble3D({ code, hue }: { code: string; hue: numbe
     >
       <Suspense fallback={null}>
         <Studio />
-        <Marble3D code={code} hue={hue} />
+        <Marble3D item={item} />
       </Suspense>
     </Canvas>
   );
