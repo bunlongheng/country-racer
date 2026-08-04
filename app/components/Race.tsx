@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { COUNTRIES, type Country } from "../data/countries";
+import { CATEGORIES, type RacerItem } from "../data/categories";
 import { TRACK_LEN, stepRacer, standings } from "@/lib/race";
 import { buildGeo, pathPoint, uOf, crossed, separate, type Geo, type Stage, type Ctx } from "@/lib/geometry";
 import { STAGES, STAGE_ICON } from "../data/stages";
@@ -28,7 +28,7 @@ const FONT = "system-ui, -apple-system, 'Segoe UI', sans-serif";
 
 type Racer = {
   i: number;
-  ci: number; // country index
+  it: number; // index into this race's 10-item list
   dist: number;
   speed: number;
   form: number;
@@ -46,7 +46,7 @@ type Racer = {
   fx: ObType | null; // effect currently on this marble (shown as a floating icon)
   fxTime: number; // seconds left to show that icon
 };
-type Winner = { country: Country; place: number };
+type Winner = { item: RacerItem; place: number };
 // A one-off explosion drawn where a marble hit a bomb (position from u/laneN).
 type Blast = { u: number; laneN: number; life: number; max: number };
 
@@ -110,7 +110,9 @@ const OB: Record<ObType, { shape: ObShape; good: boolean; mul?: number; time?: n
 const MYSTERY_POOL: ObType[] = ["boost", "mud", "tar", "banana", "shrink", "grow", "fire"];
 
 
-function bakeMarble(img: HTMLImageElement): HTMLCanvasElement {
+// Shared circular clip + rim shading for a leaderboard thumbnail; `paint` fills
+// the clipped disc however the racer's skin needs (flag image, emoji, or colour).
+function bakeSprite(paint: (g: CanvasRenderingContext2D, r: number) => void): HTMLCanvasElement {
   const c = document.createElement("canvas");
   c.width = c.height = SPRITE;
   const g = c.getContext("2d")!;
@@ -119,10 +121,7 @@ function bakeMarble(img: HTMLImageElement): HTMLCanvasElement {
   g.beginPath();
   g.arc(r, r, r - 2, 0, Math.PI * 2);
   g.clip();
-  const s = Math.max(SPRITE / img.width, SPRITE / img.height);
-  const w = img.width * s;
-  const h = img.height * s;
-  g.drawImage(img, (SPRITE - w) / 2, (SPRITE - h) / 2, w, h);
+  paint(g, r);
   const rim = g.createRadialGradient(r, r, r * 0.35, r, r, r);
   rim.addColorStop(0, "rgba(0,0,0,0)");
   rim.addColorStop(0.72, "rgba(0,0,0,0.06)");
@@ -131,6 +130,50 @@ function bakeMarble(img: HTMLImageElement): HTMLCanvasElement {
   g.fillRect(0, 0, SPRITE, SPRITE);
   g.restore();
   return c;
+}
+
+function bakeImg(img: HTMLImageElement): HTMLCanvasElement {
+  return bakeSprite((g) => {
+    const s = Math.max(SPRITE / img.width, SPRITE / img.height);
+    const w = img.width * s;
+    const h = img.height * s;
+    g.drawImage(img, (SPRITE - w) / 2, (SPRITE - h) / 2, w, h);
+  });
+}
+
+function bakeEmoji(emoji: string, hue: number): HTMLCanvasElement {
+  return bakeSprite((g) => {
+    g.fillStyle = `hsl(${hue}, 62%, 58%)`;
+    g.fillRect(0, 0, SPRITE, SPRITE);
+    g.font = `${SPRITE * 0.66}px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", ${FONT}`;
+    g.textAlign = "center";
+    g.textBaseline = "middle";
+    g.fillText(emoji, SPRITE / 2, SPRITE * 0.54);
+  });
+}
+
+function bakeColor(color: string): HTMLCanvasElement {
+  return bakeSprite((g, r) => {
+    const grd = g.createRadialGradient(r * 0.7, r * 0.6, r * 0.15, r, r, r);
+    grd.addColorStop(0, "rgba(255,255,255,0.55)");
+    grd.addColorStop(0.25, color);
+    grd.addColorStop(1, color);
+    g.fillStyle = grd;
+    g.fillRect(0, 0, SPRITE, SPRITE);
+  });
+}
+
+// Bake the right kind of thumbnail for a racer item. Image skins load async and
+// invoke `done` when ready; emoji/colour skins bake synchronously and return one.
+function bakeItem(item: RacerItem, done: (c: HTMLCanvasElement) => void): HTMLCanvasElement | null {
+  if (item.img) {
+    const img = new window.Image();
+    img.onload = () => done(bakeImg(img));
+    img.src = item.img;
+    return null;
+  }
+  if (item.emoji) return bakeEmoji(item.emoji, item.hue);
+  return bakeColor(item.color ?? `hsl(${item.hue}, 80%, 55%)`);
 }
 
 
@@ -556,7 +599,7 @@ function drawEffectBadges(ctx: Ctx, g: Geo, active: Racer[]) {
 
 // Live top-5 standings board, anchored TOP-LEFT (under the lap counter) so the
 // centre of the track stays clear for the stage centrepiece.
-function drawLeaderboard(ctx: Ctx, g: Geo, order: number[], active: Racer[], sprites: HTMLCanvasElement[], lap: number, total: number) {
+function drawLeaderboard(ctx: Ctx, g: Geo, order: number[], active: Racer[], items: RacerItem[], sprites: HTMLCanvasElement[], lap: number, total: number) {
   const n = Math.min(5, order.length);
   if (n === 0) return;
   const rowH = Math.min(g.W, g.H) * 0.04; // compact - tucks into the corner
@@ -564,7 +607,7 @@ function drawLeaderboard(ctx: Ctx, g: Geo, order: number[], active: Racer[], spr
   const pad = rowH * 0.32;
   ctx.font = `600 ${rowH * 0.42}px ${FONT}`;
   let nameW = 0;
-  for (let i = 0; i < n; i++) nameW = Math.max(nameW, ctx.measureText(COUNTRIES[active[order[i]].ci].name).width);
+  for (let i = 0; i < n; i++) nameW = Math.max(nameW, ctx.measureText(items[active[order[i]].it].name).width);
   const pw = Math.min(g.W * 0.38, rowH * 1.7 + nameW + pad * 1.5);
   const ph = headerH + n * rowH + pad;
   const px = 10 * g.dpr;
@@ -581,14 +624,14 @@ function drawLeaderboard(ctx: Ctx, g: Geo, order: number[], active: Racer[], spr
   ctx.fillText(`LAP ${lap} / ${total}`, px + pad, py + headerH * 0.58);
   for (let i = 0; i < n; i++) {
     const r = active[order[i]];
-    const c = COUNTRIES[r.ci];
+    const c = items[r.it];
     const ry = py + headerH + i * rowH + rowH / 2;
     ctx.textAlign = "center";
     ctx.fillStyle = i < 3 ? MEDAL[i] : "rgba(255,255,255,0.7)";
     ctx.font = `800 ${rowH * 0.42}px ${FONT}`;
     ctx.fillText(String(i + 1), px + pad + rowH * 0.35, ry);
     const fr = rowH * 0.32;
-    const sprite = sprites[r.ci];
+    const sprite = sprites[r.it];
     if (sprite && sprite.width > 1) ctx.drawImage(sprite, px + pad + rowH * 0.75, ry - fr, fr * 2, fr * 2);
     ctx.textAlign = "left";
     ctx.fillStyle = "#fff";
@@ -669,21 +712,23 @@ export default function Race() {
   const [phase, setPhase] = useState<"loading" | "setup" | "racing" | "done">("loading");
   const [podium, setPodium] = useState<Winner[]>([]);
   const [announce, setAnnounce] = useState("");
-  const [codes, setCodes] = useState<{ code: string; hue: number }[]>([]);
+  const [items, setItems] = useState<RacerItem[]>([]);
   const liveRef = useRef<HTMLParagraphElement>(null); // sr-only lead-change announcer
   const lastLeadRef = useRef(-1);
   // Player settings chosen on the setup screen. A ref mirror lets startRace read
   // the latest values without being re-created on every change.
   const [round, setRound] = useState(3);
   const [stageIndex, setStageIndex] = useState(0);
+  const [categoryIndex, setCategoryIndex] = useState(0); // what the marbles are (countries, states, colours, fruit, veg)
   const [showLive, setShowLive] = useState(true); // live top-5 board
   const [autoPlay, setAutoPlay] = useState(false); // loop random races hands-free
   const [confirmReset, setConfirmReset] = useState(false);
-  const settings = useRef({ round: 3, stage: 0, showLive: true, autoPlay: false });
-  settings.current = { round, stage: stageIndex, showLive, autoPlay };
+  const settings = useRef({ round: 3, stage: 0, category: 0, showLive: true, autoPlay: false });
+  settings.current = { round, stage: stageIndex, category: categoryIndex, showLive, autoPlay };
   const renderRef = useRef<MarbleRender[]>([]);
   const state = useRef<{
     sprites: HTMLCanvasElement[];
+    items: RacerItem[]; // the 10 racing this heat (aligned with sprites + Racer.it)
     stage: Stage;
     active: Racer[];
     finishers: number[];
@@ -701,7 +746,7 @@ export default function Race() {
     ended: boolean;
     podiumIn: number; // seconds left before the podium shows (-1 = race not decided yet)
     showLive: boolean; // draw the live top-5 board
-  }>({ sprites: [], stage: STAGES[0], active: [], finishers: [], obstacles: [], bombTimer: 0, blasts: [], laps: 3, finishDist: TRACK_LEN * 3, countdown: 3, goFlash: 0, lastCount: 4, elapsed: 0, raf: 0, last: 0, ended: false, podiumIn: -1, showLive: true });
+  }>({ sprites: [], items: [], stage: STAGES[0], active: [], finishers: [], obstacles: [], bombTimer: 0, blasts: [], laps: 3, finishDist: TRACK_LEN * 3, countdown: 3, goFlash: 0, lastCount: 4, elapsed: 0, raf: 0, last: 0, ended: false, podiumIn: -1, showLive: true });
 
   // Flags are baked lazily (only the 10 that race, in startRace), so a cold load
   // goes straight to the setup screen instead of baking all 194 sprites upfront.
@@ -719,31 +764,33 @@ export default function Race() {
     setStageIndex(stageIdx);
     s.laps = Math.max(1, settings.current.round); // rounds = laps to race
     s.finishDist = TRACK_LEN * s.laps;
-    // pick 10 distinct random countries
-    const pool = COUNTRIES.map((_, i) => i);
+    // Pick 10 distinct random items from the chosen category (countries, states,
+    // colours, fruit, veg). A short pool (>= 10 always) is shuffled and sliced.
+    const category = CATEGORIES[settings.current.category] ?? CATEGORIES[0];
+    const pool = category.items.slice();
     for (let i = pool.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [pool[i], pool[j]] = [pool[j], pool[i]];
     }
     const chosen = pool.slice(0, RACERS);
-    // Bake just these 10 flags into the sprite cache (indexed by country) for the
-    // leaderboard thumbnails - lazily, never all 194 at once.
-    for (const ci of chosen) {
-      if (s.sprites[ci]) continue;
-      const img = new window.Image();
-      img.onload = () => {
-        s.sprites[ci] = bakeMarble(img);
-      };
-      img.src = `/flags/${COUNTRIES[ci].code}.png`;
-    }
-    setCodes(chosen.map((ci) => ({ code: COUNTRIES[ci].code, hue: COUNTRIES[ci].hue })));
+    s.items = chosen;
+    // Bake each racer's leaderboard thumbnail, keyed by its slot (0-9). Image
+    // skins (flags) load async and fill in; emoji/colour skins bake right away.
+    s.sprites = [];
+    chosen.forEach((item, k) => {
+      const sprite = bakeItem(item, (c) => {
+        s.sprites[k] = c;
+      });
+      if (sprite) s.sprites[k] = sprite;
+    });
+    setItems(chosen);
     renderRef.current = chosen.map(() => ({ x: 0, y: 0, r: 0, dx: 1, dy: 0, dist: 0, flash: 0, good: false, out: false }));
-    s.active = chosen.map((ci, k) => {
+    s.active = chosen.map((item, k) => {
       const lane = k % 5;
       const row = Math.floor(k / 5);
       return {
-        i: ci,
-        ci,
+        i: k,
+        it: k,
         dist: 0,
         speed: 0,
         form: 0.9 + Math.random() * 0.3,
@@ -915,15 +962,15 @@ export default function Race() {
             .sort((a, b) => b.dist - a.dist);
           for (const r of crossers) {
             r.place = st.finishers.length + 1;
-            st.finishers.push(r.ci);
+            st.finishers.push(r.it);
           }
           if (st.finishers.length >= NEED && st.podiumIn < 0) {
             // Race is decided - keep the scene rolling for a moment before the podium.
             st.podiumIn = 3;
-            const top = st.finishers.slice(0, NEED).map((ci, idx) => ({ country: COUNTRIES[ci], place: idx + 1 }));
+            const top = st.finishers.slice(0, NEED).map((slot, idx) => ({ item: st.items[slot], place: idx + 1 }));
             setPodium(top);
             setAnnounce(
-              `Race finished. Gold ${top[0].country.name}, silver ${top[1].country.name}, bronze ${top[2].country.name}.`,
+              `Race finished. Gold ${top[0].item.name}, silver ${top[1].item.name}, bronze ${top[2].item.name}.`,
             );
           }
           if (st.podiumIn >= 0) {
@@ -960,14 +1007,14 @@ export default function Race() {
       if (st.countdown <= 0) {
         const order = standings(st.active).filter((i) => !st.active[i].out); // hide blown-up racers
         // Announce lead changes to screen readers (the canvas board is not read).
-        const leadCi = st.active[order[0]]?.ci ?? -1;
-        if (leadCi !== lastLeadRef.current && leadCi >= 0 && !st.ended) {
-          lastLeadRef.current = leadCi;
-          if (liveRef.current) liveRef.current.textContent = `${COUNTRIES[leadCi].name} takes the lead`;
+        const leadIt = st.active[order[0]]?.it ?? -1;
+        if (leadIt !== lastLeadRef.current && leadIt >= 0 && !st.ended) {
+          lastLeadRef.current = leadIt;
+          if (liveRef.current) liveRef.current.textContent = `${st.items[leadIt].name} takes the lead`;
         }
         drawRankBadges(ctx, g, order, st.active);
         drawEffectBadges(ctx, g, st.active); // effect icon above each hit marble
-        if (st.showLive) drawLeaderboard(ctx, g, order, st.active, st.sprites, lap, st.laps);
+        if (st.showLive) drawLeaderboard(ctx, g, order, st.active, st.items, st.sprites, lap, st.laps);
         else drawLaps(ctx, g, lap, st.laps);
       } else {
         drawLaps(ctx, g, lap, st.laps);
@@ -1040,9 +1087,9 @@ export default function Race() {
         aria-label="Live race of ten country flag marbles around a track with obstacles"
         className="block h-full w-full"
       />
-      {codes.length > 0 && (
+      {items.length > 0 && (
         <div className="pointer-events-none absolute inset-0">
-          <RaceMarbles codes={codes} data={renderRef} />
+          <RaceMarbles items={items} data={renderRef} />
         </div>
       )}
 
@@ -1123,6 +1170,27 @@ export default function Race() {
           </div>
 
           <div className="w-full max-w-2xl">
+            <p className="mb-3 text-center text-lg font-semibold text-white/70">Racers</p>
+            <div className="grid grid-cols-3 gap-3 sm:grid-cols-5">
+              {CATEGORIES.map((cat, i) => {
+                const on = i === categoryIndex;
+                return (
+                  <button
+                    key={cat.id}
+                    onClick={() => setCategoryIndex(i)}
+                    className={`flex flex-col items-center gap-1.5 rounded-2xl border-2 px-3 py-4 text-center transition active:scale-95 ${
+                      on ? "border-white bg-white/20 scale-105" : "border-white/15 bg-white/5 hover:bg-white/10"
+                    }`}
+                  >
+                    <span className="text-3xl">{cat.icon}</span>
+                    <span className="text-sm font-bold text-white">{cat.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="w-full max-w-2xl">
             <p className="mb-3 text-center text-lg font-semibold text-white/70">Stage</p>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               {STAGES.map((st, i) => {
@@ -1188,14 +1256,14 @@ export default function Race() {
               const px = w.place === 1 ? 168 : 104;
               const lift = w.place === 1 ? "mb-8" : "";
               return (
-                <div key={w.country.code} className={`relative flex flex-col items-center ${lift}`} style={{ width: px }}>
+                <div key={w.item.id} className={`relative flex flex-col items-center ${lift}`} style={{ width: px }}>
                   <div className="relative z-10 mb-1 text-5xl sm:text-6xl">{medal}</div>
                   <div style={{ width: px, height: px }} className="drop-shadow-[0_12px_30px_rgba(0,0,0,0.6)]">
-                    <PodiumMarble3D code={w.country.code} hue={w.country.hue} />
+                    <PodiumMarble3D item={w.item} />
                   </div>
                   {/* Absolute so a long name never widens the column and shifts the podium off-centre. */}
                   <p className="absolute left-1/2 top-full mt-2 -translate-x-1/2 whitespace-nowrap text-lg font-bold sm:text-2xl">
-                    {w.country.name}
+                    {w.item.name}
                   </p>
                 </div>
               );
