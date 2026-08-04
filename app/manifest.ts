@@ -2,8 +2,8 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Country Racer",
-    short_name: "Country Racer",
+    name: "Racer",
+    short_name: "Racer",
     description:
       "10 random countries race as glossy flag marbles around a themed oval track.",
     start_url: "/",

@@ -1148,7 +1148,7 @@ export default function Race() {
 
       {phase === "setup" && (
         <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-7 overflow-y-auto bg-black/85 px-6 py-8 backdrop-blur-sm">
-          <h1 className="text-4xl font-extrabold text-white sm:text-5xl">Country Racer</h1>
+          <h1 className="text-4xl font-extrabold text-white sm:text-5xl">Racer</h1>
 
           <div className="flex items-center gap-4">
             <span className="text-lg font-semibold text-white/70">Round</span>

@@ -10,28 +10,28 @@ const fredoka = Fredoka({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://country-racer-bheng.vercel.app"),
-  title: "Country Racer",
+  metadataBase: new URL("https://racer-bheng.vercel.app"),
+  title: "Racer",
   description:
     "10 random countries race as glossy flag marbles around a themed oval track - pick a stage, set the laps, and watch who takes gold, silver, and bronze. A tiny, playful game for kids.",
-  applicationName: "Country Racer",
+  applicationName: "Racer",
   // Big link-preview card when shared (hero auto-linked from app/opengraph-image.png).
   openGraph: {
-    title: "Country Racer",
+    title: "Racer",
     description: "10 flag-marble countries race around a themed track - pick a stage, set the laps, and watch who takes gold.",
-    url: "https://country-racer-bheng.vercel.app",
-    siteName: "Country Racer",
+    url: "https://racer-bheng.vercel.app",
+    siteName: "Racer",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Country Racer",
+    title: "Racer",
     description: "10 flag-marble countries race around a themed track - who takes gold, silver, and bronze?",
   },
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "Country Racer",
+    title: "Racer",
   },
 };
 

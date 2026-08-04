@@ -1,16 +1,16 @@
-# Country Racer
+# Racer
 
 > Pick a themed stage, set the laps, and watch 10 random countries race as glossy 3D flag marbles around an oval track - dodging hazards, jockeying the whole way - until a gold, silver, and bronze podium is crowned. A tiny, playful game for kids.
 
 <p>
-  <img alt="CI" src="https://github.com/bunlongheng/country-racer/actions/workflows/ci.yml/badge.svg" />
+  <img alt="CI" src="https://github.com/bunlongheng/racer/actions/workflows/ci.yml/badge.svg" />
   <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-brightgreen.svg" />
   <img alt="Next.js" src="https://img.shields.io/badge/Next.js-16-black?logo=nextdotjs" />
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white" />
   <img alt="PWA" src="https://img.shields.io/badge/PWA-offline-5a0fc8" />
 </p>
 
-**Live:** https://country-racer-bheng.vercel.app
+**Live:** https://racer-bheng.vercel.app
 
 ![A race in progress](docs/screenshots/race.png)
 
@@ -108,8 +108,8 @@ Everything is **self-hosted** - the 194 flags, the font (`next/font`), and all a
 ## Quick start
 
 ```bash
-git clone https://github.com/bunlongheng/country-racer.git
-cd country-racer
+git clone https://github.com/bunlongheng/racer.git
+cd racer
 npm install
 npm run dev            # http://localhost:3030
 ```

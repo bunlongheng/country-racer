@@ -1,4 +1,4 @@
-// Pure, deterministic race logic for Country Racer. No DOM, no randomness baked
+// Pure, deterministic race logic for Racer. No DOM, no randomness baked
 // in (seeds/time are passed in), so every function here is unit-testable. The
 // canvas component owns rendering and the real-time loop.
 
